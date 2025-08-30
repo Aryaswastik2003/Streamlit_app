@@ -114,7 +114,7 @@ def recommend_boxes(part_dim, part_weight, fragility_level,
 # -----------------------------
 # Streamlit UI
 # -----------------------------
-st.title(" Packaging Optimization System")
+st.title(" Packaging Asset Design")
 
 # Part inputs
 st.header("Part Details")
@@ -204,7 +204,7 @@ if st.button("Get Optimized Box"):
         st.write(f"**Box Type:** {best_box['Box Type']}")
         st.write(f"**Box Dimensions:** {best_box['Box Dimensions']}")
         st.write(f"**Max Parts in Box:** {best_box['Max Parts']}")
-        st.write(f"**Wasted Volume %:** {best_box['Wasted Volume %']:.1f}%")
+        # st.write(f"**Wasted Volume %:** {best_box['Wasted Volume %']:.1f}%")
         st.write("**Reasons:**")
         for reason in best_box["Reasons"]:
             st.write(reason)
