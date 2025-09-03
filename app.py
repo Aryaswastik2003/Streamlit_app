@@ -43,128 +43,6 @@ LOCATIONS = ["Select", "Chennai", "Bangalore", "Delhi", "Pune", "Hyderabad", "Mu
 # -----------------------------
 # Helpers
 # -----------------------------
-def fits_in_cell(part_dim: Tuple[int, int, int], cell_dim: Tuple[float, float, float]) -> Tuple[bool, Tuple[int,int,int]]:
-    """Check if part can fit in a cell in any orientation; returns (fits, chosen_orientation)."""
-    L, W, H = part_dim
-    cL, cW, cH = cell_dim
-    orientations = [(L, W, H), (L, H, W), (W, L, H), (W, H, L), (H, L, W), (H, W, L)]
-    for o in orientations:
-        if o[0] <= cL and o[1] <= cW and o[2] <= cH:
-            return True, o
-    return False, part_dim
-
-# -----------------------------
-# Recommendation Functions
-# -----------------------------
-def recommend_insert(part_dim, part_weight, fragility, stacking_allowed):
-    # Default recommendation based on fragility (unchanged core logic)
-    if fragility == "High":
-        insert = {"Type": "Thermo-vac PP Tray", "Note": "Best for fragile / Class-A parts.",
-                  "Matrix": (2, 2), "Units per Insert": 4,
-                  "Outer Dimensions": (1100, 900, 410), "Weight": 50.0}
-    elif fragility == "Medium":
-        insert = {"Type": "PP Partition Grid", "Note": "General purpose for medium parts.",
-                  "Matrix": (4, 3), "Units per Insert": 12,
-                  "Outer Dimensions": (1100, 900, 410), "Weight": 328.78}
-    elif fragility == "Low" and part_weight > 20:
-        insert = {"Type": "Honeycomb Layer Pad", "Note": "For heavy stacks, adds strength.",
-                  "Matrix": (3, 2), "Units per Insert": 6,
-                  "Outer Dimensions": (1100, 900, 410), "Weight": 120.0}
-    else:
-        insert = {"Type": "Woven PP Pouch", "Note": "For scratch-sensitive or small batches.",
-                  "Matrix": (5, 2), "Units per Insert": 10,
-                  "Outer Dimensions": (1100, 900, 410), "Weight": 80.0}
-
-    # --- Apply PRD tolerance rules (5 mm clearance + 5 mm partition) ---
-    outer_L, outer_W, outer_H = insert["Outer Dimensions"]
-    cols, rows = insert["Matrix"]
-    # (cols+1) ribs in L and (rows+1) ribs in W → 5mm each (partition thickness & wall clearance)
-    net_L = outer_L - (cols + 1) * 5
-    net_W = outer_W - (rows + 1) * 5
-    cell_L = round(net_L / cols, 2)
-    cell_W = round(net_W / rows, 2)
-    cell_H = round(outer_H - 5, 2)  # top clearance
-    insert["Cell Dimensions"] = (cell_L, cell_W, cell_H)
-
-    # Descriptive reasoning (point-wise)
-    reasons = []
-    reasons.append(f"Fragility level **{fragility}** → selected **{insert['Type']}** ({insert['Note']}).")
-    reasons.append(f"Matrix **{cols} × {rows}** → **{insert['Units per Insert']} units/layer**.")
-    reasons.append("Applied **5 mm wall & partition clearance** per PRD (manufacturing tolerance).")
-    reasons.append(f"Outer size **{outer_L}×{outer_W}×{outer_H} mm** → cell inner **{cell_L}×{cell_W}×{cell_H} mm**.")
-    # Fit check (non-blocking, for reasoning only)
-    fits, orient = fits_in_cell(part_dim, insert["Cell Dimensions"])
-    if fits:
-        reasons.append(f"Part fits inside cell (example orientation **{orient} mm**).")
-    else:
-        reasons.append("⚠️ Part dimensions exceed a single cell in all orientations; consider larger matrix cells or alternate insert.")
-    if not stacking_allowed:
-        reasons.append("Stacking disabled → insert chosen prioritizes single-layer protection/handling.")
-    insert["Reasons"] = reasons
-    return insert
-
-
-def recommend_separator(insert, stacking_allowed):
-    if not stacking_allowed:
-        return {"Needed": False, "Type": None, "Note": "Stacking disabled.",
-                "Dimensions": None, "Weight": 0.0,
-                "Reasons": ["Stacking is disabled → no inter-layer separator is required per PRD."]}
-
-    if insert["Type"] in ("PP Partition Grid", "Thermo-vac PP Tray"):
-        sep = {"Needed": True, "Type": "Honeycomb Layer Pad",
-               "Note": "Adds strength between stacked layers.",
-               "Dimensions": (insert["Outer Dimensions"][0], insert["Outer Dimensions"][1]),
-               "Weight": 1.49}
-        reasons = [
-            "Stacking is enabled → separator required between layers (PRD).",
-            f"Insert type **{insert['Type']}** benefits from **Honeycomb Layer Pad** to prevent deflection & contact marks.",
-            f"Separator spans full footprint **{sep['Dimensions'][0]}×{sep['Dimensions'][1]} mm** for load spread.",
-            f"Separator unit weight **{sep['Weight']} kg** (multiplies by layers−1).",
-        ]
-        sep["Reasons"] = reasons
-        return sep
-
-    sep = {"Needed": True, "Type": "PP Sheet Separator",
-           "Note": "General separator for multiple layers.",
-           "Dimensions": (insert["Outer Dimensions"][0], insert["Outer Dimensions"][1]),
-           "Weight": 1.0}
-    sep["Reasons"] = [
-        "Stacking is enabled → separator required between layers (PRD).",
-        "General-purpose **PP Sheet Separator** adequate for the selected insert.",
-        f"Separator spans full footprint **{sep['Dimensions'][0]}×{sep['Dimensions'][1]} mm**.",
-        f"Lightweight at **{sep['Weight']} kg** each.",
-    ]
-    return sep
-
-
-def orientations(part_dim, restriction):
-    L, W, H = part_dim
-    if restriction == "Length Standing":
-        return [(H, W, L)]
-    if restriction == "Width Standing":
-        return [(L, H, W)]
-    if restriction == "Height Standing":
-        return [(L, W, H)]
-    return [(L, W, H), (L, H, W), (W, L, H), (W, H, L), (H, L, W), (H, W, L)]
-
-
-def check_fit(part_dim, box_dim, orientation_restriction):
-    part_L, part_W, part_H = part_dim
-    box_L, box_W, box_H = box_dim
-    best_fit, wasted_volume, chosen_orientation = 0, 100.0, part_dim
-    for l, w, h in orientations(part_dim, orientation_restriction):
-        fit_l = box_L // l
-        fit_w = box_W // w
-        fit_h = box_H // h
-        fit_count = fit_l * fit_w * fit_h
-        used_volume = fit_count * (part_L * part_W * part_H)
-        total_volume = box_L * box_W * box_H
-        waste = ((total_volume - used_volume) / total_volume) * 100.0 if total_volume else 100.0
-        if fit_count > best_fit:
-            best_fit, wasted_volume, chosen_orientation = fit_count, waste, (l, w, h)
-    return best_fit, wasted_volume, chosen_orientation
-
-
 def get_internal_dims(box: Box) -> Tuple[int, int, int]:
     """Apply PRD rules for internal dimensions per box type."""
     L, W, H = box.dims
@@ -173,84 +51,159 @@ def get_internal_dims(box: Box) -> Tuple[int, int, int]:
     elif box.box_type == "PLS":
         return (L - 34, W - 34, H - 210)
     elif box.box_type == "FLC":
-        return (L, W, H)  # FLC = same as external
+        # FLCs often have near-identical internal dims, but let's assume a small wall thickness
+        return (L - 30, W - 30, H - 30)
     else:
         return (L, W, H)
 
+# -----------------------------
+# Recommendation Functions (New Dynamic Logic)
+# -----------------------------
+def design_insert_for_box(part_dim, box_internal_dim, fragility):
+    """
+    Designs the best possible insert matrix for a given part inside a specific box.
+    Returns a dictionary with insert details if a fit is found, otherwise None.
+    """
+    best_fit = {
+        "units_per_insert": 0,
+        "matrix": (0, 0),
+        "cell_dims": (0, 0, 0),
+        "outer_dims": (0, 0, 0),
+        "part_orientation": part_dim,
+    }
 
-def recommend_boxes(part_dim, part_weight, orientation_restriction, stacking_allowed,
-                    insert, separator, forklift_available, forklift_capacity, forklift_dim, annual_parts):
-    best_box = None
-    for box in BOX_DATABASE:
-        # Forklift dimension check
-        if forklift_available and forklift_dim:
-            if not (box.dims[0] <= forklift_dim[0] and box.dims[1] <= forklift_dim[1] and box.dims[2] <= forklift_dim[2]):
-                continue
+    PARTITION_THICKNESS = 5
+    WALL_CLEARANCE = 5
+    TOP_CLEARANCE = 5
 
-        # Layers based on insert height
-        insert_height = insert["Outer Dimensions"][2]
-        layers = box.dims[2] // insert_height
-        if layers < 1:
+    L, W, H = part_dim
+    orientations = set([(L, W, H), (L, H, W), (W, L, H), (W, H, L), (H, L, W), (H, W, L)])
+    
+    box_L, box_W, box_H = box_internal_dim
+
+    for pL, pW, pH in orientations:
+        if pH > (box_H - TOP_CLEARANCE):
             continue
 
-        # Parts per box = layers × units per insert
-        fit_count = layers * insert["Units per Insert"]
+        if (pL + PARTITION_THICKNESS) <= 0 or (pW + PARTITION_THICKNESS) <= 0:
+            continue
+            
+        cols = (box_L - WALL_CLEARANCE) // (pL + PARTITION_THICKNESS)
+        rows = (box_W - WALL_CLEARANCE) // (pW + PARTITION_THICKNESS)
+        
+        units_this_orientation = cols * rows
 
-        # Weight calculation
+        if units_this_orientation > best_fit["units_per_insert"]:
+            insert_L = (cols * pL) + ((cols + 1) * PARTITION_THICKNESS)
+            insert_W = (rows * pW) + ((rows + 1) * PARTITION_THICKNESS)
+            insert_H = pH + TOP_CLEARANCE
+
+            best_fit["units_per_insert"] = units_this_orientation
+            best_fit["matrix"] = (cols, rows)
+            best_fit["cell_dims"] = (pL, pW, pH)
+            best_fit["outer_dims"] = (insert_L, insert_W, insert_H)
+            best_fit["part_orientation"] = (pL, pW, pH)
+
+    if best_fit["units_per_insert"] == 0:
+        return None
+
+    if fragility == "High":
+        best_fit["type"] = "Thermo-vac PP Tray"
+        best_fit["note"] = "Best for fragile / Class-A parts."
+        best_fit["weight_kg"] = 50.0
+    elif fragility == "Medium":
+        best_fit["type"] = "PP Partition Grid"
+        best_fit["note"] = "General purpose for medium parts."
+        best_fit["weight_kg"] = 32.78
+    else:
+        best_fit["type"] = "Woven PP Pouch"
+        best_fit["note"] = "For scratch-sensitive or small batches."
+        best_fit["weight_kg"] = 80.0
+        
+    return best_fit
+
+
+def get_separator_details(insert, stacking_allowed):
+    """Determines separator needs based on the designed insert."""
+    if not stacking_allowed or not insert:
+        return {"needed": False, "type": "N/A", "weight_kg": 0.0, "note": "Stacking disabled."}
+
+    if insert["type"] in ("PP Partition Grid", "Thermo-vac PP Tray"):
+        return {"needed": True, "type": "Honeycomb Layer Pad", "weight_kg": 1.49, "note": "Adds strength between stacked layers."}
+    else:
+        return {"needed": True, "type": "PP Sheet Separator", "weight_kg": 1.0, "note": "General separator for multiple layers."}
+
+
+def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift_available,
+                    forklift_capacity, forklift_dim, annual_parts):
+    
+    best_option = None
+    rejection_log = {} # diagnostics tool
+    
+    for box in BOX_DATABASE:
+        log_key = f"{box.box_type} ({box.dims[0]}x{box.dims[1]}x{box.dims[2]})"
+        internal_dims = get_internal_dims(box)
+
+        if forklift_available and forklift_dim:
+            # Forklift check is mainly for footprint (L, W)
+            if not (box.dims[0] <= forklift_dim[0] and box.dims[1] <= forklift_dim[1]):
+                rejection_log[log_key] = f"Rejected: Box footprint ({box.dims[0]}x{box.dims[1]}) exceeds forklift dimensions ({forklift_dim[0]}x{forklift_dim[1]})."
+                continue
+        
+        insert = design_insert_for_box(part_dim, internal_dims, fragility)
+        if not insert or insert["units_per_insert"] == 0:
+            rejection_log[log_key] = f"Rejected: Part does not fit in any orientation inside the box's internal dimensions ({internal_dims[0]}x{internal_dims[1]}x{internal_dims[2]})."
+            continue
+
+        separator = get_separator_details(insert, stacking_allowed)
+        
+        insert_height = insert["outer_dims"][2]
+        if insert_height <= 0: continue
+        
+        layers = internal_dims[2] // insert_height if stacking_allowed else 1
+        if layers < 1: layers = 1
+        
+        fit_count = layers * insert["units_per_insert"]
+        if fit_count == 0: continue
+
         part_total_weight = fit_count * part_weight
-        insert_weight = insert.get("Weight", 0)
-        separator_weight = 0
-        if separator.get("Needed"):
-            separator_weight = separator.get("Weight", 0) * max(0, layers - 1)
-        total_weight = part_total_weight + insert_weight + separator_weight
-
-        # Add lid weight if FLC (PRD)
+        insert_weight_total = insert["weight_kg"] * layers
+        separator_weight_total = separator["weight_kg"] * max(0, layers - 1)
+        
+        total_weight = part_total_weight + insert_weight_total + separator_weight_total
         if box.box_type == "FLC":
             total_weight += 5.13
 
-        # Capacity check
         if total_weight > box.capacity_kg:
-            max_parts_by_weight = int((box.capacity_kg - (insert_weight + separator_weight)) // part_weight)
-            fit_count = max(0, max_parts_by_weight)
-            part_total_weight = fit_count * part_weight
-            total_weight = part_total_weight + insert_weight + separator_weight
-            if box.box_type == "FLC":
-                total_weight += 5.13
-
+            rejection_log[log_key] = f"Rejected: Total weight ({total_weight:.1f} kg) exceeds box capacity ({box.capacity_kg} kg)."
+            continue
         if forklift_available and forklift_capacity and total_weight > forklift_capacity:
+            rejection_log[log_key] = f"Rejected: Total weight ({total_weight:.1f} kg) exceeds forklift capacity ({forklift_capacity} kg)."
             continue
 
-        if fit_count == 0:
-            continue
-
-        boxes_per_year = -(-annual_parts // fit_count)  # ceil division
-        internal_dims = get_internal_dims(box)
-
-        # Descriptive reasoning (point-wise)
-        reasons = []
-        reasons.append(f"Insert **{insert['Type']}** provides **{insert['Units per Insert']} units/layer**.")
-        reasons.append(f"Box height allows **{layers} layer(s)** → **{fit_count} parts/box**.")
-        reasons.append(f"Weight breakdown: parts **{part_total_weight:.1f} kg**, insert **{insert_weight:.1f} kg**, separators **{separator_weight:.1f} kg**.")
-        if box.box_type == "FLC":
-            reasons.append("Added **FLC lid weight 5.13 kg** per PRD.")
-        reasons.append(f"Total load **{total_weight:.1f} kg** ≤ box capacity **{box.capacity_kg} kg**.")
-        reasons.append(f"Internal dims (PRD): **{internal_dims[0]}×{internal_dims[1]}×{internal_dims[2]} mm** derived from box type **{box.box_type}**.")
-        if forklift_available:
-            reasons.append("Forklift constraints validated (dims & capacity).")
-        reasons.append(f"Annual demand **{annual_parts}** → **{boxes_per_year} box(es)/year** at {fit_count} parts/box.")
-
-        if (best_box is None) or (fit_count > best_box["Max Parts"]):
-            best_box = {
-                "Box Type": box.box_type,
-                "Box Dimensions": box.dims,
-                "Internal Dimensions": internal_dims,
-                "Max Parts": fit_count,
-                "Total Weight": total_weight,
-                "Boxes/Year": boxes_per_year,
-                "Reasons": reasons,
+        if best_option is None or fit_count > best_option["box_details"]["Max Parts"]:
+            boxes_per_year = -(-annual_parts // fit_count) if fit_count > 0 else 0
+            
+            best_option = {
+                "insert_details": insert,
+                "separator_details": separator,
+                "box_details": {
+                    "Box Type": box.box_type,
+                    "Box Dimensions": box.dims,
+                    "Internal Dimensions": internal_dims,
+                    "Max Parts": fit_count,
+                    "Total Weight": total_weight,
+                    "Boxes/Year": boxes_per_year,
+                    "Layers": layers
+                },
+                "rejection_log": rejection_log
             }
-    return best_box
-
+            
+    if best_option:
+        return best_option
+    else:
+        # If no solution is found at all, return the log
+        return {"rejection_log": rejection_log}
 
 # -----------------------------
 # Login Page
@@ -265,7 +218,7 @@ def login():
     if st.button("Login", key="login_button"):
         if username == "admin" and password == "1234":
             st.session_state.logged_in = True
-            st.success("✅ Login successful!")
+            st.rerun()
         else:
             st.error("❌ Invalid username or password")
 
@@ -277,32 +230,25 @@ def packaging_app():
     st.title("🚚 Auto Parts Packaging Optimization")
 
     # Part input
-    part_length = st.number_input("Part Length (mm)", min_value=1, key="part_length")
-    part_width = st.number_input("Part Width (mm)", min_value=1, key="part_width")
-    part_height = st.number_input("Part Height (mm)", min_value=1, key="part_height")
-    part_weight = st.number_input("Part Weight (kg)", min_value=0.1, step=0.1, key="part_weight")
+    part_length = st.number_input("Part Length (mm)", min_value=1, value=350, key="part_length")
+    part_width = st.number_input("Part Width (mm)", min_value=1, value=250, key="part_width")
+    part_height = st.number_input("Part Height (mm)", min_value=1, value=150, key="part_height")
+    part_weight = st.number_input("Part Weight (kg)", min_value=0.1, step=0.1, value=2.5, key="part_weight")
 
     fragility_level = st.selectbox("Fragility Level", ["Low", "Medium", "High"], key="fragility_level")
     stacking_allowed = st.toggle("Stacking Allowed", value=True, key="stacking_allowed")
-    orientation_restriction = st.selectbox(
-        "Orientation Restriction",
-        ["Free", "Length Standing", "Width Standing", "Height Standing"],
-        key="orientation_restriction"
-    )
-
+    
     forklift_available = st.checkbox("Is forklift available?", key="forklift_available")
     forklift_capacity, forklift_dim = None, None
     if forklift_available:
-        forklift_capacity = st.number_input("Forklift Capacity (kg)", min_value=1, key="forklift_capacity")
-        fl_l = st.number_input("Forklift Max Length (mm)", min_value=1, key="forklift_l")
-        fl_w = st.number_input("Forklift Max Width (mm)", min_value=1, key="forklift_w")
-        fl_h = st.number_input("Forklift Max Height (mm)", min_value=1, key="forklift_h")
+        forklift_capacity = st.number_input("Forklift Capacity (kg)", min_value=1, value=1000, key="forklift_capacity")
+        fl_l = st.number_input("Forklift Max Length (mm)", min_value=1, value=1600, key="forklift_l")
+        fl_w = st.number_input("Forklift Max Width (mm)", min_value=1, value=1300, key="forklift_w")
+        fl_h = st.number_input("Forklift Max Height (mm)", min_value=1, value=2000, key="forklift_h")
         forklift_dim = (fl_l, fl_w, fl_h)
 
-    # Annual parts
-    annual_parts = st.number_input("Annual Auto Parts Quantity", min_value=1, step=1000, key="annual_qty")
+    annual_parts = st.number_input("Annual Auto Parts Quantity", min_value=1, step=1000, value=50000, key="annual_qty")
 
-    # Route inputs
     st.subheader("Route Information")
     source = st.selectbox("Route Source", LOCATIONS, key="route_source")
     destination = st.selectbox("Route Destination", LOCATIONS, key="route_destination")
@@ -310,93 +256,84 @@ def packaging_app():
     semiurban = st.checkbox("Semi-Urban", key="route_semiurban")
     village = st.checkbox("Village", key="route_village")
 
-    selected_routes = [r for r, flag in [("Highway", highway), ("Semi-Urban", semiurban), ("Village", village)] if flag]
-    if selected_routes:
-        pct = 100 / len(selected_routes)
-        route_distribution = {r: pct for r in selected_routes}
-    else:
-        route_distribution = {}
-
     if st.button("Get Optimized Packaging", key="optimize_button"):
         part_dim = (part_length, part_width, part_height)
-        insert = recommend_insert(part_dim, part_weight, fragility_level, stacking_allowed)
-        separator = recommend_separator(insert, stacking_allowed)
-        best_box = recommend_boxes(
-            part_dim, part_weight, orientation_restriction, stacking_allowed,
-            insert, separator, forklift_available, forklift_capacity, forklift_dim, annual_parts
+        
+        result = recommend_boxes(
+            part_dim, part_weight, stacking_allowed, fragility_level,
+            forklift_available, forklift_capacity, forklift_dim, annual_parts
         )
+        
+        # Check if a valid "box_details" key exists in the result
+        if "box_details" in result:
+            insert = result["insert_details"]
+            separator = result["separator_details"]
+            best_box = result["box_details"]
 
-        # -----------------------------
-        # Insert & Separator Cards
-        # -----------------------------
-        col1, col2 = st.columns([1, 1.2])
+            st.divider()
+            
+            col1, col2 = st.columns([1, 1.2])
+            with col1:
+                st.markdown("### 🧩 Insert & Separator Design")
+                st.markdown(f"""
+                <div style="border:1px solid #d3d3d3; border-radius:10px; padding:12px; margin-bottom:10px;">
+                    <b>Insert Details</b><br>
+                    Type: {insert['type']}<br>
+                    Matrix Pattern: {insert['matrix'][0]} × {insert['matrix'][1]}<br>
+                    Outer Dimensions: {insert['outer_dims'][0]} × {insert['outer_dims'][1]} × {insert['outer_dims'][2]} mm<br>
+                    Cell (Part Orientation): {insert['cell_dims'][0]} × {insert['cell_dims'][1]} × {insert['cell_dims'][2]} mm<br>
+                    Weight per Layer: {insert['weight_kg']} kg
+                </div>
+                <div style="border:1px solid #d3d3d3; border-radius:10px; padding:12px; margin-bottom:10px;">
+                    <b>Separator Details</b><br>
+                    Type: {separator['type'] if separator['needed'] else 'Not Required'}<br>
+                    Note: {separator.get('note', 'N/A')}<br>
+                    Weight per Unit: {separator.get('weight_kg', 'N/A')} kg
+                </div>
+                """, unsafe_allow_html=True)
 
-        with col1:
-            st.markdown("### Design of Inserts (PP material)")
-            st.markdown(f"""
-            <div style="border:1px solid #d3d3d3; border-radius:10px; padding:12px; margin-bottom:10px;">
-                <b>Insert Details</b><br>
-                Type: {insert['Type']}<br>
-                Matrix Pattern: {insert['Matrix'][0]} × {insert['Matrix'][1]}<br>
-                Outer Dimensions: {insert['Outer Dimensions'][0]} × {insert['Outer Dimensions'][1]} × {insert['Outer Dimensions'][2]} mm<br>
-                Cell Inner Dimensions: {insert['Cell Dimensions'][0]} × {insert['Cell Dimensions'][1]} × {insert['Cell Dimensions'][2]} mm<br>
-                Weight: {insert['Weight']} kg
-            </div>
-            <div style="border:1px solid #d3d3d3; border-radius:10px; padding:12px; margin-bottom:10px;">
-                <b>Separator Details</b><br>
-                Type: {separator['Type'] if separator['Needed'] else 'Not Required'}<br>
-                Dimensions: {separator.get('Dimensions', 'N/A')}<br>
-                Weight: {separator.get('Weight', 'N/A')}
-            </div>
-            """, unsafe_allow_html=True)
+            with col2:
+                st.markdown("### Matrix Pattern Visualization")
+                cell_style = "display:inline-block;border:2px solid #b7e4c7;border-radius:4px;width:40px;height:40px;margin:2px;background-color:#f8fff9;"
+                rows, cols = insert["matrix"][1], insert["matrix"][0]
+                display_rows, display_cols = min(rows, 8), min(cols, 8)
+                
+                row_html = "".join([
+                    "<div style='display:flex;flex-direction:row;'>" +
+                    "".join([f"<div style='{cell_style}'></div>" for _ in range(display_cols)]) +
+                    "</div>" for _ in range(display_rows)
+                ])
+                if rows > display_rows or cols > display_cols:
+                    row_html += f"<small><i>Displaying {display_rows}x{display_cols} of {rows}x{cols} total.</i></small>"
+                st.markdown(row_html, unsafe_allow_html=True)
 
-        with col2:
-            st.markdown("### Matrix Pattern Visualization")
-            cell_style = """
-                display:inline-block;border:2px solid #b7e4c7;border-radius:4px;
-                width:50px;height:50px;margin:2px;background-color:#f8fff9;
-            """
-            row_html = ""
-            for y in range(insert["Matrix"][1]):
-                row_html += "<div style='display:flex;flex-direction:row;'>"
-                for x in range(insert["Matrix"][0]):
-                    row_html += f"<div style='{cell_style}'></div>"
-                row_html += "</div>"
-            st.markdown(row_html, unsafe_allow_html=True)
-
-            # Descriptive, point-wise reasoning (right column, under visualization)
-            st.markdown("**✅ Insert Recommendation Reasoning**")
-            for r in insert["Reasons"]:
-                st.markdown(f"- {r}")
-
-            st.markdown("**✅ Separator Recommendation Reasoning**")
-            for r in separator["Reasons"]:
-                st.markdown(f"- {r}")
-
-        # -----------------------------
-        # Box Recommendation Card
-        # -----------------------------
-        if best_box:
+            st.divider()
             st.subheader("🏆 Outer Box Recommendation")
             box_dims = best_box["Box Dimensions"]
             internal_dims = best_box["Internal Dimensions"]
             st.markdown(f"""
-            <div style="border:2px solid #b7e4c7; border-radius:10px; padding:15px; background-color:#f0fff4;">
-                <b>Recommended Type</b>: {best_box['Box Type']} ({box_dims[0]}×{box_dims[1]}×{box_dims[2]})<br><br>
-                <b>Internal (L×W×H):</b> {internal_dims[0]} × {internal_dims[1]} × {internal_dims[2]} mm<br>
-                <b>External (L×W×H):</b> {box_dims[0]} × {box_dims[1]} × {box_dims[2]} mm<br>
-                <b>Max Parts per Box:</b> {best_box['Max Parts']}<br>
-                <b>Total Weight (incl. insert + separators):</b> {best_box['Total Weight']:.1f} kg<br>
-                <b>Boxes Required per Year:</b> {best_box['Boxes/Year']}
+            <div style="border:2px solid #2a9d8f; border-radius:10px; padding:15px; background-color:#f0fff4;">
+                <b>Recommended Type</b>: {best_box['Box Type']} ({box_dims[0]}×{box_dims[1]}×{box_dims[2]} mm)<br><br>
+                <b>Configuration:</b> {best_box['Layers']} layer(s) of {insert['units_per_insert']} parts each.<br>
+                <b>Max Parts per Box:</b> <b>{best_box['Max Parts']}</b><br>
+                <b>Total Weight:</b> {best_box['Total Weight']:.1f} kg<br>
+                <b>Boxes Required per Year:</b> {best_box['Boxes/Year']}<br>
+                <hr style="border-top: 1px solid #ddd;">
+                <small><b>Internal Dims:</b> {internal_dims[0]} × {internal_dims[1]} × {internal_dims[2]} mm</small>
             </div>
             """, unsafe_allow_html=True)
 
-            st.markdown("**✅ Box Recommendation Reasoning**")
-            for r in best_box["Reasons"]:
-                st.markdown(f"- {r}")
         else:
-            st.error("❌ No suitable box found for the given part dimensions and constraints.")
-
+            # --- NEW: Diagnostics Report ---
+            st.error("❌ No suitable box and insert combination found.", icon="🚨")
+            st.warning("Here is a diagnostics report showing why each standard box was rejected:", icon="🔬")
+            
+            log = result.get("rejection_log", {})
+            if not log:
+                st.info("No boxes were even attempted. This may indicate a problem with the initial inputs.")
+            else:
+                for box_name, reason in log.items():
+                    st.markdown(f"- **{box_name}**: {reason}")
 
 # -----------------------------
 # Controller
