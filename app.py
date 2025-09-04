@@ -313,10 +313,12 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
         used_volume_insert = insert_outer_vol * layers
         partition_volume_est = max(insert_outer_vol - (insert["units_per_insert"] * part_volume), 0)
 
+        # Updated: Wasted % is based on box volume, not insert volume
         wasted_pct_parts = 100 * (1 - (used_volume_parts / box_volume)) if box_volume > 0 else 100
-        wasted_pct_insert = 100 * (1 - (used_volume_insert / box_volume)) if box_volume > 0 else 100
+        wasted_pct_insert = 100 * ((used_volume_insert - used_volume_parts) / box_volume) if box_volume > 0 and used_volume_insert > used_volume_parts else 0
         
-        volume_efficiency_parts = 100 - wasted_pct_parts
+        # New calculation for total volume efficiency
+        volume_efficiency_total = 100 - wasted_pct_parts - wasted_pct_insert
 
         # Reject by capacity / forklift limits
         if total_weight > box.capacity_kg:
@@ -326,13 +328,13 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
             rejection_log[log_key] = f"Rejected: Total weight ({total_weight:.1f} kg) exceeds forklift capacity ({forklift_capacity} kg)."
             continue
 
-        # Choose box with HIGHEST volume efficiency (lowest wastage)
+        # Choose box with HIGHEST total volume efficiency
         if (best_option is None or 
-            volume_efficiency_parts > best_volume_efficiency or
-            (volume_efficiency_parts == best_volume_efficiency and fit_count > best_option["box_details"]["Max Parts"])):
+            volume_efficiency_total > best_volume_efficiency or
+            (volume_efficiency_total == best_volume_efficiency and fit_count > best_option["box_details"]["Max Parts"])):
             
             boxes_per_year = -(-annual_parts // fit_count) if fit_count > 0 else 0
-            best_volume_efficiency = volume_efficiency_parts
+            best_volume_efficiency = volume_efficiency_total
             
             best_option = {
                 "insert_details": insert,
@@ -351,7 +353,7 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
                     },
                     "Wasted Volume % (parts)": wasted_pct_parts,
                     "Wasted Volume % (insert)": wasted_pct_insert,
-                    "Volume Efficiency %": volume_efficiency_parts,
+                    "Volume Efficiency %": volume_efficiency_total,
                     "Insert Outer Volume (mm^3)": insert_outer_vol,
                     "Partition Volume Estimate (mm^3)": partition_volume_est,
                     "Boxes/Year": boxes_per_year,
@@ -509,17 +511,19 @@ def packaging_app():
             internal_dims = best_box["Internal Dimensions"]
 
             weight_breakdown = best_box["Weight Breakdown"]
-            volume_efficiency = best_box.get("Volume Efficiency %", 0)
-
+            volume_efficiency_total = best_box.get("Volume Efficiency %", 0)
+            wasted_pct_insert = best_box['Wasted Volume % (insert)']
+            
             # Display with explicit formula lines and volume efficiency highlight
             st.markdown(f"""
             <div style="border:2px solid #2a9d8f; border-radius:10px; padding:15px; background-color:#f0fff4;">
                 <b>Recommended Type</b>: {best_box['Box Type']} ({box_dims[0]}×{box_dims[1]}×{box_dims[2]} mm)<br><br>
-                <b>🎯 Volume Efficiency:</b> <span style="color:#2a9d8f; font-weight:bold; font-size:1.2em;">{volume_efficiency:.1f}%</span> (Optimized for minimum wastage)<br>
+                <b>🎯 Overall Volume Efficiency:</b> <span style="color:#2a9d8f; font-weight:bold; font-size:1.2em;">{volume_efficiency_total:.1f}%</span><br>
+                <small>
+                    (100% - Wasted % Parts: {best_box['Wasted Volume % (parts)']:.1f}% - Wasted % Insert: {wasted_pct_insert:.1f}%)
+                </small><br>
                 <b>Configuration:</b> {best_box['Layers']} layer(s) of {insert['units_per_insert']} parts each.<br>
                 <b>Max Parts per Box:</b> <b>{best_box['Max Parts']}</b><br>
-                <b>Wasted Volume (parts-based):</b> {best_box['Wasted Volume % (parts)']:.1f}%<br>
-                <b>Wasted Volume (insert-based - realistic):</b> {best_box['Wasted Volume % (insert)']:.1f}%<br>
                 <hr style="border-top: 1px solid #ddd;">
                 <b>Total Weight:</b> {best_box['Total Weight']:.1f} kg<br>
                 <small>
