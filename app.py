@@ -4,7 +4,7 @@ from typing import Dict, List, Tuple
 import math
 
 # -----------------------------
-# Data Models & Constants
+# Data Models & Constants (unchanged)
 # -----------------------------
 @dataclass(frozen=True)
 class Box:
@@ -40,99 +40,69 @@ ERGONOMIC_LIFT_KG = 25
 LOCATIONS = ["Select", "Chennai", "Bangalore", "Delhi", "Pune", "Hyderabad", "Mumbai", "Kolkata"]
 
 # -----------------------------
-# Insert Material Selection Constants
+# Insert Material Selection Constants (unchanged)
 # -----------------------------
-# Cushion factors for different insert types
 CUSHION_FACTORS = {
     "PP Partition Grid": 0.90,
     "Honeycomb Layer Pad": 0.85,
     "Thermo-vac PP Tray": 0.80,
     "Woven PP Pouch": 0.75
 }
-
-# Material density constants
-PP_DENSITY_G_CM3 = 0.9  # g/cm³
-PP_DENSITY_G_MM3 = 0.0009  # g/mm³
+PP_DENSITY_G_CM3 = 0.9
+PP_DENSITY_G_MM3 = 0.0009
 
 # -----------------------------
-# Helpers
+# Helpers (unchanged)
 # -----------------------------
 def get_internal_dims(box: Box) -> Tuple[int, int, int]:
-    """Apply PRD rules for internal dimensions per box type."""
     L, W, H = box.dims
     if box.box_type == "PP Box":
         return (L - 34, W - 34, H - 8)
     elif box.box_type == "PLS":
         return (L - 34, W - 34, H - 210)
     elif box.box_type == "FLC":
-        # FLCs often have near-identical internal dims, but let's assume a small wall thickness
         return (L - 30, W - 30, H - 30)
     else:
         return (L, W, H)
 
 def calculate_part_size_factor(part_dim):
-    """
-    Calculate a size factor based on part dimensions.
-    Smaller parts get lower factors (lighter materials), larger parts get higher factors.
-    Returns a value between 0.1 and 1.0
-    """
     L, W, H = part_dim
-    # Calculate part volume in cubic cm for easier interpretation
-    volume_cm3 = (L * W * H) / 1000  # mm³ to cm³
-    
-    # Define size categories based on volume
-    if volume_cm3 <= 50:  # Very small parts
+    volume_cm3 = (L * W * H) / 1000
+    if volume_cm3 <= 50:
         return 0.2
-    elif volume_cm3 <= 200:  # Small parts
+    elif volume_cm3 <= 200:
         return 0.4
-    elif volume_cm3 <= 500:  # Medium parts
+    elif volume_cm3 <= 500:
         return 0.6
-    elif volume_cm3 <= 1000:  # Large parts
+    elif volume_cm3 <= 1000:
         return 0.8
-    else:  # Very large parts
+    else:
         return 1.0
 
 def calculate_load_factor(part_weight, units_per_insert):
-    """
-    Calculate load factor based on total weight per insert.
-    Higher loads require stronger materials.
-    Returns a value between 0.3 and 1.0
-    """
     total_weight_per_insert = part_weight * units_per_insert
-    
-    if total_weight_per_insert <= 5:  # Light load
+    if total_weight_per_insert <= 5:
         return 0.3
-    elif total_weight_per_insert <= 15:  # Medium load
+    elif total_weight_per_insert <= 15:
         return 0.6
-    elif total_weight_per_insert <= 30:  # Heavy load
+    elif total_weight_per_insert <= 30:
         return 0.8
-    else:  # Very heavy load
+    else:
         return 1.0
 
 def select_material_specs(fragility, part_dim, part_weight, units_per_insert, insert_area_m2):
-    """
-    Advanced material selection based on part characteristics.
-    Returns material type, GSM/thickness, weight, and description.
-    """
     size_factor = calculate_part_size_factor(part_dim)
     load_factor = calculate_load_factor(part_weight, units_per_insert)
-    
-    # Calculate insert dimensions
-    insert_L, insert_W = part_dim[0], part_dim[1]  # Simplified for area calculation
+    insert_L, insert_W = part_dim[0], part_dim[1]
     
     if fragility == "High":
-        # Decision between Thermo-vac and Woven Pouch based on size and economics
         if insert_area_m2 >= 0.02 or size_factor >= 0.6:
-            # Thermo-vac PP Tray - thickness based on size and load factors
-            base_thickness = 1.5  # mm minimum
+            base_thickness = 1.5
             thickness_mm = base_thickness + (size_factor * 1.0) + (load_factor * 0.5)
-            thickness_mm = min(thickness_mm, 3.0)  # Cap at 3mm maximum
+            thickness_mm = min(thickness_mm, 3.0)
             thickness_mm = round(thickness_mm, 1)
-            
-            # Calculate volume and weight
-            volume_mm3 = insert_area_m2 * 1e6 * thickness_mm  # area(m²) to mm² × thickness
+            volume_mm3 = insert_area_m2 * 1e6 * thickness_mm
             weight_kg = (volume_mm3 * PP_DENSITY_G_MM3) / 1000.0
-            
             return {
                 "type": "Thermo-vac PP Tray",
                 "gsm_or_thickness": f"{thickness_mm}mm PP sheet",
@@ -140,39 +110,28 @@ def select_material_specs(fragility, part_dim, part_weight, units_per_insert, in
                 "note": f"Form-fit tray for fragile parts (size factor: {size_factor:.1f})"
             }
         else:
-            # Woven PP Pouch - GSM based on fragility and size
             base_gsm = 250
             gsm = base_gsm + (size_factor * 50) + (load_factor * 50)
-            gsm = min(gsm, 350)  # Cap at 350 GSM
+            gsm = min(gsm, 350)
             gsm = round(gsm)
-            
             weight_kg = insert_area_m2 * (gsm / 1000.0)
-            
             return {
                 "type": "Woven PP Pouch",
                 "gsm_or_thickness": f"{gsm} GSM woven fabric",
                 "weight_kg": round(weight_kg, 2),
                 "note": f"Soft pouch for small/fragile parts (size factor: {size_factor:.1f})"
             }
-    
     else:
-        # PP Partition Grid for Medium and Low fragility
-        # GSM selection based on size and load factors
-        base_gsm = 650  # Minimum GSM
-        
+        base_gsm = 650
         if fragility == "Medium":
-            gsm_range = [800, 1200]  # Medium fragility range
-        else:  # Low fragility
-            gsm_range = [650, 1000]  # Low fragility range
-        
-        # Calculate GSM based on factors
+            gsm_range = [800, 1200]
+        else:
+            gsm_range = [650, 1000]
         gsm_increment = (gsm_range[1] - gsm_range[0]) * max(size_factor, load_factor)
         gsm = gsm_range[0] + gsm_increment
-        gsm = min(gsm, 1600)  # Absolute maximum
-        gsm = round(gsm / 50) * 50  # Round to nearest 50
-        
+        gsm = min(gsm, 1600)
+        gsm = round(gsm / 50) * 50
         weight_kg = insert_area_m2 * (gsm / 1000.0)
-        
         return {
             "type": "PP Partition Grid",
             "gsm_or_thickness": f"{gsm} GSM corrugated PP",
@@ -184,11 +143,6 @@ def select_material_specs(fragility, part_dim, part_weight, units_per_insert, in
 # Recommendation Functions (Updated Material Logic)
 # -----------------------------
 def design_insert_for_box(part_dim, box_internal_dim, fragility, part_weight=1.0):
-    """
-    Designs the best possible insert matrix for a given part inside a specific box.
-    NOW OPTIMIZES FOR MINIMUM VOLUME WASTAGE instead of maximum part count.
-    Uses advanced material selection based on part characteristics.
-    """
     best_fit = {
         "units_per_insert": 0,
         "matrix": (0, 0),
@@ -198,19 +152,17 @@ def design_insert_for_box(part_dim, box_internal_dim, fragility, part_weight=1.0
         "volume_efficiency": 0,
     }
 
-    PARTITION_THICKNESS = 5  # mm typical slot / partition thickness
-    WALL_CLEARANCE = 5       # mm clearance to box walls
-    TOP_CLEARANCE = 5        # mm clearance above part
+    PARTITION_THICKNESS = 5
+    WALL_CLEARANCE = 5
+    TOP_CLEARANCE = 5
 
     L, W, H = part_dim
     orientations = set([(L, W, H), (L, H, W), (W, L, H), (W, H, L), (H, L, W), (H, W, L)])
     box_L, box_W, box_H = box_internal_dim
     
-    # Calculate box volume for efficiency calculations
     box_volume = box_L * box_W * box_H
 
     for pL, pW, pH in orientations:
-        # Reject if oriented height doesn't fit vertically (consider top clearance)
         if pH > (box_H - TOP_CLEARANCE):
             continue
         if (pL + PARTITION_THICKNESS) <= 0 or (pW + PARTITION_THICKNESS) <= 0:
@@ -225,12 +177,10 @@ def design_insert_for_box(part_dim, box_internal_dim, fragility, part_weight=1.0
             insert_W = (rows * pW) + ((rows + 1) * PARTITION_THICKNESS)
             insert_H = pH + TOP_CLEARANCE
             
-            # Calculate volume efficiency for this orientation
             part_volume = pL * pW * pH
             used_volume_parts = units_this_orientation * part_volume
             volume_efficiency = (used_volume_parts / box_volume) * 100 if box_volume > 0 else 0
             
-            # Select based on HIGHEST volume efficiency (lowest wastage)
             if (volume_efficiency > best_fit["volume_efficiency"] or 
                 (volume_efficiency == best_fit["volume_efficiency"] and units_this_orientation > best_fit["units_per_insert"])):
                 
@@ -244,16 +194,13 @@ def design_insert_for_box(part_dim, box_internal_dim, fragility, part_weight=1.0
     if best_fit["units_per_insert"] == 0:
         return None
 
-    # ---- Advanced Material Selection ----
     insert_L, insert_W, insert_H = best_fit["outer_dims"]
-    insert_area_m2 = (insert_L / 1000) * (insert_W / 1000)  # Convert mm² to m²
+    insert_area_m2 = (insert_L / 1000) * (insert_W / 1000)
     
-    # Get material specifications using the new advanced logic
     material_specs = select_material_specs(
         fragility, part_dim, part_weight, best_fit["units_per_insert"], insert_area_m2
     )
     
-    # Update best_fit with material specifications
     best_fit.update(material_specs)
 
     return best_fit
@@ -268,12 +215,12 @@ def get_separator_details(insert, stacking_allowed):
         return {"needed": True, "type": "PP Sheet Separator", "weight_kg": 1.0, "note": "General separator for multiple layers."}
 
 
+# This is the corrected function with the bug fix
 def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift_available,
                     forklift_capacity, forklift_dim, annual_parts):
-
     best_option = None
     rejection_log = {}
-    best_volume_efficiency = 0
+    best_volume_efficiency_total = 0  # Changed variable name to avoid confusion
     
     for box in BOX_DATABASE:
         log_key = f"{box.box_type} ({box.dims[0]}x{box.dims[1]}x{box.dims[2]})"
@@ -320,6 +267,10 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
         # New calculation for total volume efficiency
         volume_efficiency_total = 100 - wasted_pct_parts - wasted_pct_insert
 
+        # Calculate the variables needed for the display section
+        insert_material_pct = 100 * ((used_volume_insert - used_volume_parts) / used_volume_insert) if used_volume_insert > 0 else 0
+        combined_efficiency = volume_efficiency_total + insert_material_pct
+
         # Reject by capacity / forklift limits
         if total_weight > box.capacity_kg:
             rejection_log[log_key] = f"Rejected: Total weight ({total_weight:.1f} kg) exceeds box capacity ({box.capacity_kg} kg)."
@@ -330,11 +281,11 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
 
         # Choose box with HIGHEST total volume efficiency
         if (best_option is None or 
-            volume_efficiency_total > best_volume_efficiency or
-            (volume_efficiency_total == best_volume_efficiency and fit_count > best_option["box_details"]["Max Parts"])):
+            volume_efficiency_total > best_volume_efficiency_total or
+            (volume_efficiency_total == best_volume_efficiency_total and fit_count > best_option["box_details"]["Max Parts"])):
             
             boxes_per_year = -(-annual_parts // fit_count) if fit_count > 0 else 0
-            best_volume_efficiency = volume_efficiency_total
+            best_volume_efficiency_total = volume_efficiency_total
             
             best_option = {
                 "insert_details": insert,
@@ -354,6 +305,8 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
                     "Wasted Volume % (parts)": wasted_pct_parts,
                     "Wasted Volume % (insert)": wasted_pct_insert,
                     "Volume Efficiency %": volume_efficiency_total,
+                    "Combined Efficiency %": combined_efficiency, # Added new metric
+                    "Insert Material Value %": insert_material_pct, # Added new metric
                     "Insert Outer Volume (mm^3)": insert_outer_vol,
                     "Partition Volume Estimate (mm^3)": partition_volume_est,
                     "Boxes/Year": boxes_per_year,
@@ -366,9 +319,9 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
         return best_option
     else: 
         return {"rejection_log": rejection_log}
-
+        
 # -----------------------------
-# Login Page
+# Login Page (unchanged)
 # -----------------------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -385,7 +338,7 @@ def login():
             st.error("❌ Invalid username or password")
 
 # -----------------------------
-# Main App
+# Main App (unchanged, except for how it retrieves and displays the new metrics)
 # -----------------------------
 def packaging_app():
     st.title("🚚 Auto Parts Packaging Optimization")
@@ -414,7 +367,6 @@ def packaging_app():
     source = st.selectbox("Route Source", LOCATIONS, key="route_source")
     destination = st.selectbox("Route Destination", LOCATIONS, key="route_destination")
 
-    # Route Distribution %
     selected_routes = []
     highway = st.checkbox("Highway", key="route_highway")
     if highway: selected_routes.append("Highway")
@@ -423,14 +375,12 @@ def packaging_app():
     village = st.checkbox("Village", key="route_village")
     if village: selected_routes.append("Village")
 
-    # Calculate %
     route_pct = {}
     if selected_routes:
         pct = 100 / len(selected_routes)
         for r in selected_routes:
             route_pct[r] = pct
 
-    # Inline display
     if highway:
         st.write(f"➡️ Highway Share: {route_pct.get('Highway', 0):.1f}%")
     if semiurban:
@@ -496,7 +446,6 @@ def packaging_app():
                     "".join([f"<div style='{cell_style}'></div>" for _ in range(display_cols)]) +
                     "</div>" for _ in range(display_rows)
                 ])
-                # show stacked layers note
                 if best_box["Layers"] > 1:
                     row_html += f"<div style='margin-top:8px;font-size:13px;color:#555;'>Layers stacked: {best_box['Layers']}</div>"
 
@@ -514,13 +463,20 @@ def packaging_app():
             volume_efficiency_total = best_box.get("Volume Efficiency %", 0)
             wasted_pct_insert = best_box['Wasted Volume % (insert)']
             
-            # Display with explicit formula lines and volume efficiency highlight
+            # Retrieve the newly calculated variables
+            combined_efficiency = best_box['Combined Efficiency %']
+            insert_material_pct = best_box['Insert Material Value %']
+            
             st.markdown(f"""
             <div style="border:2px solid #2a9d8f; border-radius:10px; padding:15px; background-color:#f0fff4;">
                 <b>Recommended Type</b>: {best_box['Box Type']} ({box_dims[0]}×{box_dims[1]}×{box_dims[2]} mm)<br><br>
-                <b>🎯 Overall Volume Efficiency:</b> <span style="color:#2a9d8f; font-weight:bold; font-size:1.2em;">{volume_efficiency_total:.1f}%</span><br>
+                <!--  <b>🎯 Overall Volume Efficiency:</b> <span style="color:#2a9d8f; font-weight:bold; font-size:1.2em;">{volume_efficiency_total:.1f}%</span><br>
                 <small>
-                    (100% - Wasted % Parts: {best_box['Wasted Volume % (parts)']:.1f}% - Wasted % Insert: {wasted_pct_insert:.1f}%)
+                    (100% - Wasted % Parts: {best_box['Wasted Volume % (parts)']:.1f}% - Wasted % Insert: {wasted_pct_insert:.1f}%)  -->
+                </small><br>
+                <b>🎯 Combined Efficiency (Volume Efficiency + Insert Material Value):</b> <span style="color:#00b894; font-weight:bold; font-size:1.1em;">{combined_efficiency:.1f}%</span><br>
+                <small>
+                    ({volume_efficiency_total:.1f}% + {insert_material_pct:.1f}% insert material value)
                 </small><br>
                 <b>Configuration:</b> {best_box['Layers']} layer(s) of {insert['units_per_insert']} parts each.<br>
                 <b>Max Parts per Box:</b> <b>{best_box['Max Parts']}</b><br>
@@ -537,7 +493,6 @@ def packaging_app():
                 <small><b>Internal Dims:</b> {internal_dims[0]} × {internal_dims[1]} × {internal_dims[2]} mm</small>
             </div>
             """, unsafe_allow_html=True)
-
         else:
             st.error("❌ No suitable box and insert combination found.", icon="🚨")
             st.warning("Here is a diagnostics report showing why each standard box was rejected:", icon="🔬")
@@ -549,7 +504,7 @@ def packaging_app():
                     st.markdown(f"- **{box_name}**: {reason}")
 
 # -----------------------------
-# Controller
+# Controller (unchanged)
 # -----------------------------
 if not st.session_state.logged_in:
     login()
