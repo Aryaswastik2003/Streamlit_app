@@ -468,7 +468,7 @@ def packaging_app():
             insert_material_pct = best_box['Insert Material Value %']
             
             st.markdown(f"""
-            <div style="border:2px solid #2a9d8f; border-radius:10px; padding:15px; background-color:#f0fff4;">
+            <div style="border:2px solid #2a9d8f; border-radius:10px; padding:15px;">
                 <b>Recommended Type</b>: {best_box['Box Type']} ({box_dims[0]}×{box_dims[1]}×{box_dims[2]} mm)<br><br>
                 <!--  <b>🎯 Overall Volume Efficiency:</b> <span style="color:#2a9d8f; font-weight:bold; font-size:1.2em;">{volume_efficiency_total:.1f}%</span><br>
                 <small>
