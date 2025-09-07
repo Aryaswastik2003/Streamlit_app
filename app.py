@@ -19,14 +19,33 @@ class Truck:
     payload_kg: float
     trip_cost: float  # dummy cost per trip
 
+# --- Box dataclass now carries an estimated empty box mass (kg) ---
+@dataclass(frozen=True)
+class Box:
+    box_type: str
+    dims: Tuple[int, int, int]  # (L, W, H) in mm
+    capacity_kg: float
+    empty_weight_kg: float = 0.0   # estimated empty box mass (includes lid where applicable)
+
+# --- BOX_DATABASE updated with PRD-informed approximate empty weights ---
 BOX_DATABASE: List[Box] = [
-    Box("PP Box", (400, 300, 235), 16),
-    Box("PP Box", (600, 400, 348), 20),
-    Box("Foldable Crate", (600, 400, 348), 15),
-    Box("FLC", (1200, 1000, 595), 700),
-    Box("FLC", (1200, 1000, 1200), 1000),
-    Box("PLS", (1500, 1200, 1000), 600),
+    # Foldable Crates / PP Box (PRD: 6 standard sizes, capacity 15-16kg)
+    # Using light-weight PP estimates (examples: 0.6 - 2.2 kg depending on size/thickness)
+    Box("PP Box", (400, 300, 235), 16, 0.8),
+    Box("PP Box", (600, 400, 348), 20, 1.8),
+
+    # Foldable Crate (explicit type in DB) - matches PRD small crate sizes
+    Box("Foldable Crate", (600, 400, 348), 15, 1.9),
+
+    # FLCs (PRD: includes lid weight ~5.13 kg; typical total empty mass often in 4-9 kg range)
+    # These values are PRD-informed conservative estimates (replace with measured PRD value if you have it)
+    Box("FLC", (1200, 1000, 595), 700, 6.8),    # standard FLC (includes lid mass)
+    Box("FLC", (1200, 1000, 1200), 1000, 10.5), # taller FLC variant
+
+    # PLS (pallet + lid sleeve) — heavier structure
+    Box("PLS", (1500, 1200, 1000), 600, 28.0),
 ]
+
 
 TRUCKS: List[Truck] = [
     Truck("9T Truck", (5500, 2200, 2400), 9000, 15000),
@@ -217,7 +236,8 @@ def get_separator_details(insert, stacking_allowed):
 
 # This is the corrected function with the bug fix
 def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift_available,
-                    forklift_capacity, forklift_dim, annual_parts):
+                    forklift_capacity, forklift_dim, annual_parts,orientation_restriction
+                    ):
     best_option = None
     rejection_log = {}
     best_volume_efficiency_total = 0  # Changed variable name to avoid confusion
@@ -245,12 +265,38 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
         fit_count = layers * insert["units_per_insert"]
         if fit_count == 0: continue
 
-        # Weight breakdown
+        # 🔧 Limit parts by box weight capacity so large boxes can still be used with fewer parts
+        if part_weight <= 0:
+            rejection_log[log_key] = f"Rejected: Invalid part weight ({part_weight})."
+            continue
+
+        max_parts_by_weight = int(box.capacity_kg // part_weight)
+        if max_parts_by_weight < 1:
+            rejection_log[log_key] = f"Rejected: Single part weight ({part_weight} kg) exceeds box capacity ({box.capacity_kg} kg)."
+            continue
+
+        # Use the smaller of geometric fit and weight-based fit
+        fit_count = min(fit_count, max_parts_by_weight)
+
+        # Weight breakdown (recomputed after limiting fit_count)
         part_total_weight = fit_count * part_weight
         insert_weight_total = insert["weight_kg"] * layers
         separator_weight_total = separator["weight_kg"] * max(0, layers - 1)
         flc_weight = 5.13 if box.box_type == "FLC" else 0
         total_weight = part_total_weight + insert_weight_total + separator_weight_total + flc_weight
+        if total_weight > box.capacity_kg:
+            while fit_count > 0 and total_weight > box.capacity_kg:
+                fit_count -= 1
+                part_total_weight = fit_count * part_weight
+                total_weight = part_total_weight + insert_weight_total + separator_weight_total + flc_weight
+
+        # If nothing fits even after reduction → reject
+        if fit_count <= 0:
+            rejection_log[log_key] = f"Rejected: Even 1 part + packaging exceeds box capacity ({box.capacity_kg} kg)."
+            continue
+              # skip this box option, exceeds capacity
+
+
 
         # Volume/waste metrics
         part_volume = part_dim[0] * part_dim[1] * part_dim[2]
@@ -272,9 +318,18 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
         combined_efficiency = volume_efficiency_total + insert_material_pct
 
         # Reject by capacity / forklift limits
+# Reject by capacity / forklift limits (allow partial fills for larger boxes)
         if total_weight > box.capacity_kg:
-            rejection_log[log_key] = f"Rejected: Total weight ({total_weight:.1f} kg) exceeds box capacity ({box.capacity_kg} kg)."
-            continue
+            # Instead of rejecting outright, calculate how many parts actually fit safely
+            max_safe_parts = int(box.capacity_kg // part_weight)
+            if max_safe_parts <= 0:
+                rejection_log[log_key] = f"Rejected: Box capacity ({box.capacity_kg} kg) is too low for even 1 part."
+                continue
+            # Adjust fit_count down to safe capacity
+            fit_count = min(fit_count, max_safe_parts)
+            part_total_weight = fit_count * part_weight
+            total_weight = part_total_weight + insert_weight_total + separator_weight_total + flc_weight
+
         if forklift_available and forklift_capacity and total_weight > forklift_capacity:
             rejection_log[log_key] = f"Rejected: Total weight ({total_weight:.1f} kg) exceeds forklift capacity ({forklift_capacity} kg)."
             continue
@@ -302,6 +357,8 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
                         "Separators": separator_weight_total,
                         "FLC Lid": flc_weight
                     },
+                    "Capacity": box.capacity_kg,   # 👈 added here
+
                     "Wasted Volume % (parts)": wasted_pct_parts,
                     "Wasted Volume % (insert)": wasted_pct_insert,
                     "Volume Efficiency %": volume_efficiency_total,
@@ -310,8 +367,9 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
                     "Insert Outer Volume (mm^3)": insert_outer_vol,
                     "Partition Volume Estimate (mm^3)": partition_volume_est,
                     "Boxes/Year": boxes_per_year,
-                    "Layers": layers
-                },
+                    "Layers": layers,
+                    "Orientation Restriction": orientation_restriction
+                    },
                 "rejection_log": rejection_log
             }
 
@@ -361,6 +419,14 @@ def packaging_app():
         fl_h = st.number_input("Forklift Max Height (mm)", min_value=1, value=2000, key="forklift_h")
         forklift_dim = (fl_l, fl_w, fl_h)
 
+    # 👇 Add this dropdown here
+    orientation_restriction = st.selectbox(
+        "Orientation Restriction (if any)",
+        ["None", "Length Standing", "Width Standing", "Height Standing"],
+        key="orientation_restriction"
+    )
+
+
     annual_parts = st.number_input("Annual Auto Parts Quantity", min_value=1, step=1000, value=50000, key="annual_qty")
 
     st.subheader("Route Information")
@@ -392,7 +458,7 @@ def packaging_app():
         part_dim = (part_length, part_width, part_height)
         result = recommend_boxes(
             part_dim, part_weight, stacking_allowed, fragility_level,
-            forklift_available, forklift_capacity, forklift_dim, annual_parts
+            forklift_available, forklift_capacity, forklift_dim, annual_parts,orientation_restriction
         )
         if "box_details" in result:
             insert = result["insert_details"]
@@ -404,17 +470,22 @@ def packaging_app():
             with col1:
                 st.markdown("### 🧩 Insert & Separator Design")
                 st.markdown(f"""
-                <div style="border:1px solid #d3d3d3; border-radius:10px; padding:12px; margin-bottom:10px;">
-                    <b>Insert Details</b><br>
-                    Type: {insert['type']}<br>
-                    Matrix Pattern: {insert['matrix'][0]} × {insert['matrix'][1]} (cols × rows)<br>
-                    Outer Dimensions: {insert['outer_dims'][0]} × {insert['outer_dims'][1]} × {insert['outer_dims'][2]} mm<br>
-                    Cell (Part Orientation): {insert['cell_dims'][0]} × {insert['cell_dims'][1]} × {insert['cell_dims'][2]} mm<br>
-                    Auto-parts per insert: {insert['units_per_insert']}<br>
-                    Weight per Layer: {insert['weight_kg']} kg<br>
-                    <b>Material Specification:</b> {insert.get('gsm_or_thickness','N/A')}<br>
-                    <small><i>{insert.get('note', '')}</i></small>
-                </div>
+                    <div style="border:1px solid #d3d3d3; border-radius:10px; padding:12px; margin-bottom:10px;">
+                        <b>Insert Details</b>
+                        <ul>
+                            <li>Type: {insert['type']}</li>
+                            <li>Matrix Pattern: {insert['matrix'][0]} × {insert['matrix'][1]} (cols × rows)</li>
+                            <li>Outer Dimensions: {insert['outer_dims'][0]} × {insert['outer_dims'][1]} × {insert['outer_dims'][2]} mm</li>
+                            <li>Cell (Part Orientation): {insert['cell_dims'][0]} × {insert['cell_dims'][1]} × {insert['cell_dims'][2]} mm</li>
+                            <li>Orientation Restriction: {best_box['Orientation Restriction']}</li>
+                            <li>Auto-parts per insert: {insert['units_per_insert']}</li>
+                            <li>Weight per Layer: {insert['weight_kg']} kg</li>
+                            <li>Material Specification: {insert.get('gsm_or_thickness','N/A')}</li>
+                        </ul>
+                        <p style="font-size:12px; color:gray;"><i>{insert.get('note', '')}</i></p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                st.markdown(f"""
                 <div style="border:1px solid #d3d3d3; border-radius:10px; padding:12px; margin-bottom:10px;">
                     <b>Separator Details</b><br>
                     Type: {separator['type'] if separator['needed'] else 'Not Required'}<br>
@@ -468,31 +539,35 @@ def packaging_app():
             insert_material_pct = best_box['Insert Material Value %']
             
             st.markdown(f"""
-            <div style="border:2px solid #2a9d8f; border-radius:10px; padding:15px;">
-                <b>Recommended Type</b>: {best_box['Box Type']} ({box_dims[0]}×{box_dims[1]}×{box_dims[2]} mm)<br><br>
-                <!--  <b>🎯 Overall Volume Efficiency:</b> <span style="color:#2a9d8f; font-weight:bold; font-size:1.2em;">{volume_efficiency_total:.1f}%</span><br>
-                <small>
-                    (100% - Wasted % Parts: {best_box['Wasted Volume % (parts)']:.1f}% - Wasted % Insert: {wasted_pct_insert:.1f}%)  -->
-                </small><br>
-                <b>🎯 Combined Efficiency (Volume Efficiency + Insert Material Value):</b> <span style="color:#00b894; font-weight:bold; font-size:1.1em;">{combined_efficiency:.1f}%</span><br>
-                <small>
-                    ({volume_efficiency_total:.1f}% + {insert_material_pct:.1f}% insert material value)
-                </small><br>
-                <b>Configuration:</b> {best_box['Layers']} layer(s) of {insert['units_per_insert']} parts each.<br>
-                <b>Max Parts per Box:</b> <b>{best_box['Max Parts']}</b><br>
-                <hr style="border-top: 1px solid #ddd;">
-                <b>Total Weight:</b> {best_box['Total Weight']:.1f} kg<br>
-                <small>
-                    ➤ Parts: {best_box['Max Parts']} × {part_weight:.2f} kg = {weight_breakdown['Parts']:.1f} kg<br>
-                    ➤ Inserts: {insert['weight_kg']} kg × {best_box['Layers']} = {weight_breakdown['Inserts']:.1f} kg<br>
-                    ➤ Separators: {separator.get('weight_kg',0)} kg × {max(0,best_box['Layers']-1)} = {weight_breakdown['Separators']:.1f} kg<br>
-                    ➤ FLC Lid: {weight_breakdown['FLC Lid']:.2f} kg<br>
-                </small><br>
-                <b>Boxes Required per Year:</b> {best_box['Boxes/Year']}<br>
-                <hr style="border-top: 1px solid #ddd;">
-                <small><b>Internal Dims:</b> {internal_dims[0]} × {internal_dims[1]} × {internal_dims[2]} mm</small>
-            </div>
-            """, unsafe_allow_html=True)
+<div style="border:2px solid #2a9d8f; border-radius:10px; padding:15px;">
+    <b>Recommended Type</b>: {best_box['Box Type']} ({box_dims[0]}×{box_dims[1]}×{box_dims[2]} mm)<br><br>
+    <b>🎯 Net Efficiency:</b> 
+    <span style="color:#00b894; font-weight:bold; font-size:1.1em;">{volume_efficiency_total:.1f}%</span><br>
+        <small>(Parts vs usable box volume after inserts)</small><br>
+    <b>Configuration:</b> {best_box['Layers']} layer(s) of {insert['units_per_insert']} parts each.<br>
+    <b>Max Parts per Box:</b> <b>{best_box['Max Parts']}</b><br>
+    <hr style="border-top: 1px solid #ddd;">
+    <b>Box Capacity:</b> {best_box['Capacity']:.1f} kg<br>
+    <b>Total Weight</b> inside the box: {best_box['Total Weight']:.1f} kg<br>
+    <small>
+        ➤ Parts: {best_box['Max Parts']} × {part_weight:.2f} kg = {weight_breakdown['Parts']:.1f} kg<br>
+        ➤ Inserts: {insert['weight_kg']} kg × {best_box['Layers']} = {weight_breakdown['Inserts']:.1f} kg<br>
+        ➤ Separators: {separator.get('weight_kg',0)} kg × {max(0,best_box['Layers']-1)} = {weight_breakdown['Separators']:.1f} kg<br>
+        ➤ FLC Lid: {weight_breakdown['FLC Lid']:.2f} kg<br>
+    </small><br>
+    <b>Boxes Required per Year:</b> {best_box['Boxes/Year']}<br>
+    <hr style="border-top: 1px solid #ddd;">
+    <small><b>Internal Dims:</b> {internal_dims[0]} × {internal_dims[1]} × {internal_dims[2]} mm</small>
+</div>
+""", unsafe_allow_html=True)
+
+
+
+
+
+
+
+
         else:
             st.error("❌ No suitable box and insert combination found.", icon="🚨")
             st.warning("Here is a diagnostics report showing why each standard box was rejected:", icon="🔬")
