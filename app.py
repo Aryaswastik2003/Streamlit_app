@@ -6,11 +6,6 @@ import math
 # -----------------------------
 # Data Models & Constants (unchanged)
 # -----------------------------
-@dataclass(frozen=True)
-class Box:
-    box_type: str
-    dims: Tuple[int, int, int]  # (L, W, H) in mm
-    capacity_kg: float
 
 @dataclass(frozen=True)
 class Truck:
@@ -76,13 +71,14 @@ PP_DENSITY_G_MM3 = 0.0009
 def get_internal_dims(box: Box) -> Tuple[int, int, int]:
     L, W, H = box.dims
     if box.box_type == "PP Box":
-        return (L - 34, W - 34, H - 8)
+        return (max(0, L - 34), max(0, W - 34), max(0, H - 8))
     elif box.box_type == "PLS":
-        return (L - 34, W - 34, H - 210)
+        return (max(0, L - 34), max(0, W - 34), max(0, H - 210))
     elif box.box_type == "FLC":
-        return (L - 30, W - 30, H - 30)
+        return (max(0, L - 30), max(0, W - 30), max(0, H - 30))
     else:
-        return (L, W, H)
+        return (max(0, L), max(0, W), max(0, H))
+
 
 def calculate_part_size_factor(part_dim):
     L, W, H = part_dim
@@ -161,7 +157,7 @@ def select_material_specs(fragility, part_dim, part_weight, units_per_insert, in
 # -----------------------------
 # Recommendation Functions (Updated Material Logic)
 # -----------------------------
-def design_insert_for_box(part_dim, box_internal_dim, fragility, part_weight=1.0):
+def design_insert_for_box(part_dim, box_internal_dim, fragility, part_weight=1.0, orientation_restriction="None"):
     best_fit = {
         "units_per_insert": 0,
         "matrix": (0, 0),
@@ -176,10 +172,33 @@ def design_insert_for_box(part_dim, box_internal_dim, fragility, part_weight=1.0
     TOP_CLEARANCE = 5
 
     L, W, H = part_dim
-    orientations = set([(L, W, H), (L, H, W), (W, L, H), (W, H, L), (H, L, W), (H, W, L)])
+
+    # build orientations and filter by orientation_restriction if requested
+    all_orients = [
+        (L, W, H), (L, H, W), (W, L, H),
+        (W, H, L), (H, L, W), (H, W, L)
+    ]
+    if orientation_restriction in (None, "None"):
+        orientations = set(all_orients)
+    else:
+        if orientation_restriction == "Length Standing":
+            orientations = {o for o in all_orients if o[2] == L}
+        elif orientation_restriction == "Width Standing":
+            orientations = {o for o in all_orients if o[2] == W}
+        elif orientation_restriction == "Height Standing":
+            orientations = {o for o in all_orients if o[2] == H}
+        else:
+            orientations = set(all_orients)
+
     box_L, box_W, box_H = box_internal_dim
-    
+
+    # Guard against invalid box dimensions
+    if box_L <= 0 or box_W <= 0 or box_H <= 0:
+        return None
+
     box_volume = box_L * box_W * box_H
+    if box_volume <= 0:
+        return None
 
     for pL, pW, pH in orientations:
         if pH > (box_H - TOP_CLEARANCE):
@@ -187,19 +206,19 @@ def design_insert_for_box(part_dim, box_internal_dim, fragility, part_weight=1.0
         if (pL + PARTITION_THICKNESS) <= 0 or (pW + PARTITION_THICKNESS) <= 0:
             continue
 
-        cols = (box_L - WALL_CLEARANCE) // (pL + PARTITION_THICKNESS)
-        rows = (box_W - WALL_CLEARANCE) // (pW + PARTITION_THICKNESS)
+        cols = max(0, (box_L - WALL_CLEARANCE) // (pL + PARTITION_THICKNESS))
+        rows = max(0, (box_W - WALL_CLEARANCE) // (pW + PARTITION_THICKNESS))
         units_this_orientation = cols * rows
         
         if units_this_orientation > 0:
             insert_L = (cols * pL) + ((cols + 1) * PARTITION_THICKNESS)
             insert_W = (rows * pW) + ((rows + 1) * PARTITION_THICKNESS)
-            insert_H = pH + TOP_CLEARANCE
+            insert_H = min(box_H, pH + TOP_CLEARANCE)  # clamp to box height
             
             part_volume = pL * pW * pH
             used_volume_parts = units_this_orientation * part_volume
-            volume_efficiency = (used_volume_parts / box_volume) * 100 if box_volume > 0 else 0
-            
+            volume_efficiency = (used_volume_parts / box_volume) * 100
+
             if (volume_efficiency > best_fit["volume_efficiency"] or 
                 (volume_efficiency == best_fit["volume_efficiency"] and units_this_orientation > best_fit["units_per_insert"])):
                 
@@ -215,7 +234,7 @@ def design_insert_for_box(part_dim, box_internal_dim, fragility, part_weight=1.0
 
     insert_L, insert_W, insert_H = best_fit["outer_dims"]
     insert_area_m2 = (insert_L / 1000) * (insert_W / 1000)
-    
+
     material_specs = select_material_specs(
         fragility, part_dim, part_weight, best_fit["units_per_insert"], insert_area_m2
     )
@@ -251,7 +270,7 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
                 rejection_log[log_key] = f"Rejected: Box footprint ({box.dims[0]}x{box.dims[1]}) exceeds forklift dimensions ({forklift_dim[0]}x{forklift_dim[1]})."
                 continue
 
-        insert = design_insert_for_box(part_dim, internal_dims, fragility, part_weight)
+        insert = design_insert_for_box(part_dim, internal_dims, fragility, part_weight, orientation_restriction)
         if not insert or insert["units_per_insert"] == 0:
             rejection_log[log_key] = f"Rejected: Part does not fit in any orientation inside the box's internal dimensions ({internal_dims[0]}x{internal_dims[1]}x{internal_dims[2]})."
             continue
@@ -279,16 +298,22 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
         fit_count = min(fit_count, max_parts_by_weight)
 
         # Weight breakdown (recomputed after limiting fit_count)
+        # Weight breakdown (recomputed after limiting fit_count)
         part_total_weight = fit_count * part_weight
         insert_weight_total = insert["weight_kg"] * layers
         separator_weight_total = separator["weight_kg"] * max(0, layers - 1)
-        flc_weight = 5.13 if box.box_type == "FLC" else 0
-        total_weight = part_total_weight + insert_weight_total + separator_weight_total + flc_weight
-        if total_weight > box.capacity_kg:
-            while fit_count > 0 and total_weight > box.capacity_kg:
-                fit_count -= 1
-                part_total_weight = fit_count * part_weight
-                total_weight = part_total_weight + insert_weight_total + separator_weight_total + flc_weight
+
+        # use the box DB empty mass (includes lid if present); default to 0.0 if missing
+        box_empty_mass = getattr(box, "empty_weight_kg", 0.0)
+
+        total_weight = part_total_weight + insert_weight_total + separator_weight_total + box_empty_mass
+
+        # if overweight, reduce fit_count until it fits the box capacity
+        while fit_count > 0 and total_weight > box.capacity_kg:
+            fit_count -= 1
+            part_total_weight = fit_count * part_weight
+            total_weight = part_total_weight + insert_weight_total + separator_weight_total + box_empty_mass
+
 
         # If nothing fits even after reduction → reject
         if fit_count <= 0:
@@ -355,7 +380,7 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
                         "Parts": part_total_weight,
                         "Inserts": insert_weight_total,
                         "Separators": separator_weight_total,
-                        "FLC Lid": flc_weight
+                        "FLC Lid": box_empty_mass
                     },
                     "Capacity": box.capacity_kg,   # 👈 added here
 
