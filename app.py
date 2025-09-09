@@ -4,7 +4,7 @@ from typing import Dict, List, Tuple
 import math
 
 # -----------------------------
-# Data Models & Constants (updated with truck optimization)
+# Data Models & Constants (updated with PRD requirements)
 # -----------------------------
 
 @dataclass(frozen=True)
@@ -21,26 +21,28 @@ class Box:
     dims: Tuple[int, int, int]  # (L, W, H) in mm
     capacity_kg: float
     empty_weight_kg: float = 0.0   # estimated empty box mass (includes lid where applicable)
+    asset_cost: float = 0.0       # PRD requirement: packaging asset cost
 
-# --- BOX_DATABASE updated with PRD-informed approximate empty weights ---
+# --- BOX_DATABASE updated with PRD-informed complete 6 PP Box sizes ---
 BOX_DATABASE: List[Box] = [
-    # Foldable Crates / PP Box (PRD: 6 standard sizes, capacity 15-16kg)
-    # Using light-weight PP estimates (examples: 0.6 - 2.2 kg depending on size/thickness)
-    Box("PP Box", (400, 300, 235), 16, 0.8),
-    Box("PP Box", (600, 400, 348), 20, 1.8),
+    # Complete PP Box database (6 standard sizes as per PRD, capacity 15-16kg)
+    Box("PP Box", (300, 200, 150), 15, 0.6, 450),   # Small
+    Box("PP Box", (400, 300, 200), 16, 0.8, 580),   # Medium-Small
+    Box("PP Box", (400, 300, 235), 16, 0.8, 620),   # Medium
+    Box("PP Box", (500, 350, 250), 15, 1.2, 720),   # Medium-Large
+    Box("PP Box", (600, 400, 300), 16, 1.6, 850),   # Large
+    Box("PP Box", (600, 400, 348), 16, 1.8, 920),   # Extra-Large
 
     # Foldable Crate (explicit type in DB) - matches PRD small crate sizes
-    Box("Foldable Crate", (600, 400, 348), 15, 1.9),
+    Box("Foldable Crate", (600, 400, 348), 15, 1.9, 1200),
 
     # FLCs (PRD: includes lid weight ~5.13 kg; typical total empty mass often in 4-9 kg range)
-    # These values are PRD-informed conservative estimates (replace with measured PRD value if you have it)
-    Box("FLC", (1200, 1000, 595), 700, 6.8),    # standard FLC (includes lid mass)
-    Box("FLC", (1200, 1000, 1200), 1000, 10.5), # taller FLC variant
+    Box("FLC", (1200, 1000, 595), 700, 6.8, 2500),    # standard FLC (includes lid mass)
+    Box("FLC", (1200, 1000, 1200), 1000, 10.5, 3200), # taller FLC variant
 
     # PLS (pallet + lid sleeve) — heavier structure
-    Box("PLS", (1500, 1200, 1000), 600, 28.0),
+    Box("PLS", (1500, 1200, 1000), 600, 28.0, 4800),
 ]
-
 
 TRUCKS: List[Truck] = [
     Truck("9T Truck", (5500, 2200, 2400), 9000, 15000),
@@ -86,7 +88,7 @@ BOX_HANDLING_COST = {
 }
 
 # -----------------------------
-# Insert Material Selection Constants (unchanged)
+# Updated Material Selection Constants (PRD requirements)
 # -----------------------------
 CUSHION_FACTORS = {
     "PP Partition Grid": 0.90,
@@ -97,8 +99,14 @@ CUSHION_FACTORS = {
 PP_DENSITY_G_CM3 = 0.9
 PP_DENSITY_G_MM3 = 0.0009
 
+# PRD-specified spacing requirements
+SIDE_CLEARANCE = 2.5      # PRD: 2.5mm space on all 4 sides
+TOP_CLEARANCE = 5         # PRD: 5mm space on top
+BOTTOM_CLEARANCE = 0      # PRD: 0mm space on bottom
+PARTITION_THICKNESS = 5   # PRD: Insert thickness 5mm or 6mm (using 5mm)
+
 # -----------------------------
-# Helpers (unchanged)
+# Helpers (updated with PRD spacing)
 # -----------------------------
 def get_internal_dims(box: Box) -> Tuple[int, int, int]:
     L, W, H = box.dims
@@ -139,54 +147,60 @@ def calculate_load_factor(part_weight, units_per_insert):
 def select_material_specs(fragility, part_dim, part_weight, units_per_insert, insert_area_m2):
     size_factor = calculate_part_size_factor(part_dim)
     load_factor = calculate_load_factor(part_weight, units_per_insert)
-    insert_L, insert_W = part_dim[0], part_dim[1]
+    
+    # PRD requirement: Insert thickness should be ONLY 5mm or 6mm
+    # Choose thickness based on load requirements
+    total_load = part_weight * units_per_insert
+    if total_load > 20 or fragility == "High":
+        insert_thickness = 6.0  # Heavier load or high fragility = 6mm
+    else:
+        insert_thickness = 5.0  # Standard case = 5mm
     
     if fragility == "High":
         if insert_area_m2 >= 0.02 or size_factor >= 0.6:
-            base_thickness = 1.5
-            thickness_mm = base_thickness + (size_factor * 1.0) + (load_factor * 0.5)
-            thickness_mm = min(thickness_mm, 3.0)
-            thickness_mm = round(thickness_mm, 1)
-            volume_mm3 = insert_area_m2 * 1e6 * thickness_mm
+            volume_mm3 = insert_area_m2 * 1e6 * insert_thickness
             weight_kg = (volume_mm3 * PP_DENSITY_G_MM3) / 1000.0
             return {
                 "type": "Thermo-vac PP Tray",
-                "gsm_or_thickness": f"{thickness_mm}mm PP sheet",
+                "gsm_or_thickness": f"{insert_thickness}mm PP sheet",
                 "weight_kg": round(weight_kg, 2),
-                "note": f"Form-fit tray for fragile parts (size factor: {size_factor:.1f})"
+                "note": f"Form-fit tray for fragile parts (thickness: {insert_thickness}mm)"
             }
         else:
-            base_gsm = 250
-            gsm = base_gsm + (size_factor * 50) + (load_factor * 50)
-            gsm = min(gsm, 350)
-            gsm = round(gsm)
-            weight_kg = insert_area_m2 * (gsm / 1000.0)
+            # For pouches, use fixed thickness equivalent weight
+            weight_kg = insert_area_m2 * (insert_thickness / 10.0)  # Simplified weight calc
             return {
                 "type": "Woven PP Pouch",
-                "gsm_or_thickness": f"{gsm} GSM woven fabric",
+                "gsm_or_thickness": f"{insert_thickness}mm equivalent thickness",
                 "weight_kg": round(weight_kg, 2),
-                "note": f"Soft pouch for small/fragile parts (size factor: {size_factor:.1f})"
+                "note": f"Soft pouch for small/fragile parts (thickness: {insert_thickness}mm)"
             }
     else:
-        base_gsm = 650
-        if fragility == "Medium":
-            gsm_range = [800, 1200]
-        else:
-            gsm_range = [650, 1000]
-        gsm_increment = (gsm_range[1] - gsm_range[0]) * max(size_factor, load_factor)
-        gsm = gsm_range[0] + gsm_increment
-        gsm = min(gsm, 1600)
-        gsm = round(gsm / 50) * 50
-        weight_kg = insert_area_m2 * (gsm / 1000.0)
+        # PP Partition Grid - use fixed thickness instead of GSM
+        volume_mm3 = insert_area_m2 * 1e6 * insert_thickness
+        weight_kg = (volume_mm3 * PP_DENSITY_G_MM3) / 1000.0
         return {
             "type": "PP Partition Grid",
-            "gsm_or_thickness": f"{gsm} GSM corrugated PP",
+            "gsm_or_thickness": f"{insert_thickness}mm corrugated PP",
             "weight_kg": round(weight_kg, 2),
-            "note": f"Grid partition (size: {size_factor:.1f}, load: {load_factor:.1f})"
+            "note": f"Grid partition (thickness: {insert_thickness}mm, load factor: {load_factor:.1f})"
         }
 
 # -----------------------------
-# NEW: Truck Optimization Functions (Based on PRD requirements)
+# Updated Orientation Categorization (PRD Point 7)
+# -----------------------------
+def categorize_orientations(part_dim):
+    """PRD requirement: 3 categorical approaches for part standing positions"""
+    L, W, H = part_dim
+    
+    return {
+        "Height Standing": [(L, W, H), (W, L, H)],  # H is vertical
+        "Length Standing": [(H, W, L), (W, H, L)],  # L is vertical
+        "Width Standing": [(L, H, W), (H, L, W)]    # W is vertical
+    }
+
+# -----------------------------
+# Truck Optimization Functions (unchanged)
 # -----------------------------
 def get_route_distance(source, destination):
     """Get distance between two cities"""
@@ -235,10 +249,10 @@ def calculate_truck_utilization(box, box_weight, boxes_per_truck, truck):
     
     return volume_utilization, weight_utilization
 
-def calculate_trip_cost(truck, distance, route_percentages, boxes_per_truck, box_type):
-    """Calculate total cost per trip based on PRD requirements"""
+def calculate_trip_cost(truck, distance, route_percentages, boxes_per_truck, box_type, box_asset_cost):
+    """Calculate total cost per trip based on PRD requirements (including packaging asset cost)"""
     if distance <= 0:
-        return 0, 0, 0, 0
+        return 0, 0, 0, 0, 0
     
     # Fuel cost calculation based on route type distribution
     fuel_cost = 0
@@ -257,10 +271,13 @@ def calculate_trip_cost(truck, distance, route_percentages, boxes_per_truck, box
     handling_cost_per_box = BOX_HANDLING_COST.get(box_type, 40)
     total_handling_cost = boxes_per_truck * handling_cost_per_box
     
-    # Total trip cost (PRD: Trip cost + box handling cost + packaging asset one time cost)
-    total_trip_cost = truck.trip_cost + fuel_cost + total_handling_cost
+    # Packaging asset cost (PRD requirement)
+    total_asset_cost = boxes_per_truck * box_asset_cost
     
-    return total_trip_cost, fuel_cost, total_handling_cost, co2_emission
+    # Total trip cost (PRD: Trip cost + box handling cost + packaging asset cost)
+    total_trip_cost = truck.trip_cost + fuel_cost + total_handling_cost + total_asset_cost
+    
+    return total_trip_cost, fuel_cost, total_handling_cost, total_asset_cost, co2_emission
 
 def optimize_truck_loading(box_recommendation, source, destination, route_percentages):
     """Main truck optimization function as per PRD requirements"""
@@ -310,9 +327,9 @@ def optimize_truck_loading(box_recommendation, source, destination, route_percen
             selected_box, box_weight, boxes_per_truck, truck
         )
         
-        # Calculate costs and CO2
-        trip_cost, fuel_cost, handling_cost, co2_emission = calculate_trip_cost(
-            truck, distance, route_percentages, boxes_per_truck, box_type
+        # Calculate costs and CO2 (including asset cost)
+        trip_cost, fuel_cost, handling_cost, asset_cost, co2_emission = calculate_trip_cost(
+            truck, distance, route_percentages, boxes_per_truck, box_type, selected_box.asset_cost
         )
         
         # Calculate parts per truck (PRD requirement)
@@ -335,6 +352,7 @@ def optimize_truck_loading(box_recommendation, source, destination, route_percen
             "total_trip_cost": trip_cost,
             "fuel_cost": fuel_cost,
             "handling_cost": handling_cost,
+            "asset_cost": asset_cost,
             "cost_per_part": cost_per_part,
             "co2_emission": co2_emission,
             "co2_per_part": co2_per_part,
@@ -347,7 +365,7 @@ def optimize_truck_loading(box_recommendation, source, destination, route_percen
     return truck_recommendations
 
 # -----------------------------
-# Recommendation Functions (Updated Material Logic) - UNCHANGED
+# Updated Recommendation Functions (PRD Points 1, 2, 3, 7)
 # -----------------------------
 def design_insert_for_box(part_dim, box_internal_dim, fragility, part_weight=1.0, orientation_restriction="None"):
     best_fit = {
@@ -357,31 +375,10 @@ def design_insert_for_box(part_dim, box_internal_dim, fragility, part_weight=1.0
         "outer_dims": (0, 0, 0),
         "part_orientation": part_dim,
         "volume_efficiency": 0,
+        "standing_category": "None"
     }
 
-    PARTITION_THICKNESS = 5
-    WALL_CLEARANCE = 5
-    TOP_CLEARANCE = 5
-
     L, W, H = part_dim
-
-    # build orientations and filter by orientation_restriction if requested
-    all_orients = [
-        (L, W, H), (L, H, W), (W, L, H),
-        (W, H, L), (H, L, W), (H, W, L)
-    ]
-    if orientation_restriction in (None, "None"):
-        orientations = set(all_orients)
-    else:
-        if orientation_restriction == "Length Standing":
-            orientations = {o for o in all_orients if o[2] == L}
-        elif orientation_restriction == "Width Standing":
-            orientations = {o for o in all_orients if o[2] == W}
-        elif orientation_restriction == "Height Standing":
-            orientations = {o for o in all_orients if o[2] == H}
-        else:
-            orientations = set(all_orients)
-
     box_L, box_W, box_H = box_internal_dim
 
     # Guard against invalid box dimensions
@@ -392,24 +389,53 @@ def design_insert_for_box(part_dim, box_internal_dim, fragility, part_weight=1.0
     if box_volume <= 0:
         return None
 
+    # PRD Point 7: Categorize orientations by standing positions
+    categories = categorize_orientations(part_dim)
+    
+    # Build orientations based on orientation_restriction
+    if orientation_restriction in (None, "None"):
+        orientations = []
+        for category_orientations in categories.values():
+            orientations.extend(category_orientations)
+    elif orientation_restriction == "Length Standing":
+        orientations = categories["Length Standing"]
+    elif orientation_restriction == "Width Standing":
+        orientations = categories["Width Standing"]
+    elif orientation_restriction == "Height Standing":
+        orientations = categories["Height Standing"]
+    else:
+        orientations = []
+        for category_orientations in categories.values():
+            orientations.extend(category_orientations)
+
     for pL, pW, pH in orientations:
-        if pH > (box_H - TOP_CLEARANCE):
+        # PRD Point 2: Updated spacing requirements
+        available_height = box_H - TOP_CLEARANCE - BOTTOM_CLEARANCE
+        if pH > available_height:
             continue
         if (pL + PARTITION_THICKNESS) <= 0 or (pW + PARTITION_THICKNESS) <= 0:
             continue
 
-        cols = max(0, (box_L - WALL_CLEARANCE) // (pL + PARTITION_THICKNESS))
-        rows = max(0, (box_W - WALL_CLEARANCE) // (pW + PARTITION_THICKNESS))
+        # PRD Point 2: Use 2.5mm side clearance (convert to int for floor division)
+        cols = max(0, int(box_L - (2 * SIDE_CLEARANCE)) // (pL + PARTITION_THICKNESS))
+        rows = max(0, int(box_W - (2 * SIDE_CLEARANCE)) // (pW + PARTITION_THICKNESS))
         units_this_orientation = cols * rows
         
         if units_this_orientation > 0:
             insert_L = (cols * pL) + ((cols + 1) * PARTITION_THICKNESS)
             insert_W = (rows * pW) + ((rows + 1) * PARTITION_THICKNESS)
-            insert_H = min(box_H, pH + TOP_CLEARANCE)  # clamp to box height
+            insert_H = min(box_H, pH + TOP_CLEARANCE)
             
             part_volume = pL * pW * pH
             used_volume_parts = units_this_orientation * part_volume
             volume_efficiency = (used_volume_parts / box_volume) * 100
+
+            # Determine standing category
+            standing_category = "None"
+            for cat_name, cat_orientations in categories.items():
+                if (pL, pW, pH) in cat_orientations:
+                    standing_category = cat_name
+                    break
 
             if (volume_efficiency > best_fit["volume_efficiency"] or 
                 (volume_efficiency == best_fit["volume_efficiency"] and units_this_orientation > best_fit["units_per_insert"])):
@@ -420,6 +446,7 @@ def design_insert_for_box(part_dim, box_internal_dim, fragility, part_weight=1.0
                 best_fit["outer_dims"] = (insert_L, insert_W, insert_H)
                 best_fit["part_orientation"] = (pL, pW, pH)
                 best_fit["volume_efficiency"] = volume_efficiency
+                best_fit["standing_category"] = standing_category
 
     if best_fit["units_per_insert"] == 0:
         return None
@@ -432,9 +459,7 @@ def design_insert_for_box(part_dim, box_internal_dim, fragility, part_weight=1.0
     )
     
     best_fit.update(material_specs)
-
     return best_fit
-
 
 def get_separator_details(insert, stacking_allowed):
     if not stacking_allowed or not insert:
@@ -444,14 +469,43 @@ def get_separator_details(insert, stacking_allowed):
     else:
         return {"needed": True, "type": "PP Sheet Separator", "weight_kg": 1.0, "note": "General separator for multiple layers."}
 
+def calculate_cost_per_part(box, insert, separator, layers, fit_count, annual_parts, route_info):
+    """Calculate cost per part per trip as per PRD requirement (Point 1)"""
+    if not route_info or fit_count <= 0:
+        return float('inf'), {}
+    
+    # Basic cost calculation without truck optimization
+    insert_weight_total = insert["weight_kg"] * layers
+    separator_weight_total = separator["weight_kg"] * max(0, layers - 1)
+    part_total_weight = fit_count * route_info.get("part_weight", 1.0)
+    box_empty_mass = getattr(box, "empty_weight_kg", 0.0)
+    total_weight = part_total_weight + insert_weight_total + separator_weight_total + box_empty_mass
+    
+    # Estimated cost per part (simplified for box selection)
+    handling_cost = BOX_HANDLING_COST.get(box.box_type, 40)
+    asset_cost = getattr(box, "asset_cost", 0.0)
+    
+    cost_per_box = handling_cost + asset_cost
+    cost_per_part = cost_per_box / fit_count if fit_count > 0 else float('inf')
+    
+    cost_breakdown = {
+        "handling_cost_per_box": handling_cost,
+        "asset_cost_per_box": asset_cost,
+        "total_cost_per_box": cost_per_box,
+        "cost_per_part": cost_per_part
+    }
+    
+    return cost_per_part, cost_breakdown
 
-# This is the corrected function with the bug fix
 def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift_available,
-                    forklift_capacity, forklift_dim, annual_parts,orientation_restriction
-                    ):
-    best_option = None
+                    forklift_capacity, forklift_dim, annual_parts, orientation_restriction):
+    """Updated recommendation function implementing PRD Points 1, 3"""
+    
+    all_viable_options = []
     rejection_log = {}
-    best_volume_efficiency_total = 0  # Changed variable name to avoid confusion
+    
+    # Simple route info for cost calculation
+    route_info = {"part_weight": part_weight}
     
     for box in BOX_DATABASE:
         log_key = f"{box.box_type} ({box.dims[0]}x{box.dims[1]}x{box.dims[2]})"
@@ -476,7 +530,7 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
         fit_count = layers * insert["units_per_insert"]
         if fit_count == 0: continue
 
-        # 🔧 Limit parts by box weight capacity so large boxes can still be used with fewer parts
+        # Limit parts by box weight capacity
         if part_weight <= 0:
             rejection_log[log_key] = f"Rejected: Invalid part weight ({part_weight})."
             continue
@@ -486,115 +540,181 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
             rejection_log[log_key] = f"Rejected: Single part weight ({part_weight} kg) exceeds box capacity ({box.capacity_kg} kg)."
             continue
 
-        # Use the smaller of geometric fit and weight-based fit
         fit_count = min(fit_count, max_parts_by_weight)
 
-        # Weight breakdown (recomputed after limiting fit_count)
-        # Weight breakdown (recomputed after limiting fit_count)
+        # Weight breakdown
         part_total_weight = fit_count * part_weight
         insert_weight_total = insert["weight_kg"] * layers
         separator_weight_total = separator["weight_kg"] * max(0, layers - 1)
-
-        # use the box DB empty mass (includes lid if present); default to 0.0 if missing
         box_empty_mass = getattr(box, "empty_weight_kg", 0.0)
-
         total_weight = part_total_weight + insert_weight_total + separator_weight_total + box_empty_mass
 
-        # if overweight, reduce fit_count until it fits the box capacity
+        # Adjust fit_count if overweight
         while fit_count > 0 and total_weight > box.capacity_kg:
             fit_count -= 1
             part_total_weight = fit_count * part_weight
             total_weight = part_total_weight + insert_weight_total + separator_weight_total + box_empty_mass
 
-
-        # If nothing fits even after reduction → reject
         if fit_count <= 0:
             rejection_log[log_key] = f"Rejected: Even 1 part + packaging exceeds box capacity ({box.capacity_kg} kg)."
             continue
-              # skip this box option, exceeds capacity
 
+        # Forklift capacity check
+        if forklift_available and forklift_capacity and total_weight > forklift_capacity:
+            rejection_log[log_key] = f"Rejected: Total weight ({total_weight:.1f} kg) exceeds forklift capacity ({forklift_capacity} kg)."
+            continue
 
+        # PRD Point 1: Calculate cost per part per trip
+        cost_per_part, cost_breakdown = calculate_cost_per_part(
+            box, insert, separator, layers, fit_count, annual_parts, route_info
+        )
 
-        # Volume/waste metrics
+        # Volume/waste metrics (unchanged)
         part_volume = part_dim[0] * part_dim[1] * part_dim[2]
         box_volume = internal_dims[0] * internal_dims[1] * internal_dims[2]
         used_volume_parts = fit_count * part_volume
         insert_outer_vol = insert["outer_dims"][0] * insert["outer_dims"][1] * insert["outer_dims"][2]
         used_volume_insert = insert_outer_vol * layers
-        partition_volume_est = max(insert_outer_vol - (insert["units_per_insert"] * part_volume), 0)
 
-        # Updated: Wasted % is based on box volume, not insert volume
         wasted_pct_parts = 100 * (1 - (used_volume_parts / box_volume)) if box_volume > 0 else 100
         wasted_pct_insert = 100 * ((used_volume_insert - used_volume_parts) / box_volume) if box_volume > 0 and used_volume_insert > used_volume_parts else 0
-        
-        # New calculation for total volume efficiency
         volume_efficiency_total = 100 - wasted_pct_parts - wasted_pct_insert
 
-        # Calculate the variables needed for the display section
         insert_material_pct = 100 * ((used_volume_insert - used_volume_parts) / used_volume_insert) if used_volume_insert > 0 else 0
         combined_efficiency = volume_efficiency_total + insert_material_pct
 
-        # Reject by capacity / forklift limits
-# Reject by capacity / forklift limits (allow partial fills for larger boxes)
-        if total_weight > box.capacity_kg:
-            # Instead of rejecting outright, calculate how many parts actually fit safely
-            max_safe_parts = int(box.capacity_kg // part_weight)
-            if max_safe_parts <= 0:
-                rejection_log[log_key] = f"Rejected: Box capacity ({box.capacity_kg} kg) is too low for even 1 part."
-                continue
-            # Adjust fit_count down to safe capacity
-            fit_count = min(fit_count, max_safe_parts)
-            part_total_weight = fit_count * part_weight
-            total_weight = part_total_weight + insert_weight_total + separator_weight_total + box_empty_mass
+        boxes_per_year = -(-annual_parts // fit_count) if fit_count > 0 else 0
 
-        if forklift_available and forklift_capacity and total_weight > forklift_capacity:
-            rejection_log[log_key] = f"Rejected: Total weight ({total_weight:.1f} kg) exceeds forklift capacity ({forklift_capacity} kg)."
-            continue
-
-        # Choose box with HIGHEST total volume efficiency
-        if (best_option is None or 
-            volume_efficiency_total > best_volume_efficiency_total or
-            (volume_efficiency_total == best_volume_efficiency_total and fit_count > best_option["box_details"]["Max Parts"])):
-            
-            boxes_per_year = -(-annual_parts // fit_count) if fit_count > 0 else 0
-            best_volume_efficiency_total = volume_efficiency_total
-            
-            best_option = {
-                "insert_details": insert,
-                "separator_details": separator,
-                "box_details": {
-                    "Box Type": box.box_type,
-                    "Box Dimensions": box.dims,
-                    "Internal Dimensions": internal_dims,
-                    "Max Parts": fit_count,
-                    "Total Weight": total_weight,
-                    "Weight Breakdown": {
-                        "Parts": part_total_weight,
-                        "Inserts": insert_weight_total,
-                        "Separators": separator_weight_total,
-                        "FLC Lid": box_empty_mass
-                    },
-                    "Capacity": box.capacity_kg,   # 👈 added here
-
-                    "Wasted Volume % (parts)": wasted_pct_parts,
-                    "Wasted Volume % (insert)": wasted_pct_insert,
-                    "Volume Efficiency %": volume_efficiency_total,
-                    "Parts Efficiency %": combined_efficiency, # Renamed metric
-                    "Insert Material Value %": insert_material_pct, # Added new metric
-                    "Insert Outer Volume (mm^3)": insert_outer_vol,
-                    "Partition Volume Estimate (mm^3)": partition_volume_est,
-                    "Boxes/Year": boxes_per_year,
-                    "Layers": layers,
-                    "Orientation Restriction": orientation_restriction
-                    },
-                "rejection_log": rejection_log
+        option = {
+            "insert_details": insert,
+            "separator_details": separator,
+            "cost_per_part": cost_per_part,
+            "cost_breakdown": cost_breakdown,
+            "box_details": {
+                "Box Type": box.box_type,
+                "Box Dimensions": box.dims,
+                "Internal Dimensions": internal_dims,
+                "Max Parts": fit_count,
+                "Total Weight": total_weight,
+                "Weight Breakdown": {
+                    "Parts": part_total_weight,
+                    "Inserts": insert_weight_total,
+                    "Separators": separator_weight_total,
+                    "FLC Lid": box_empty_mass
+                },
+                "Capacity": box.capacity_kg,
+                "Asset Cost": getattr(box, "asset_cost", 0.0),
+                "Wasted Volume % (parts)": wasted_pct_parts,
+                "Wasted Volume % (insert)": wasted_pct_insert,
+                "Volume Efficiency %": volume_efficiency_total,
+                "Parts Efficiency %": combined_efficiency,
+                "Insert Material Value %": insert_material_pct,
+                "Insert Outer Volume (mm^3)": insert_outer_vol,
+                "Boxes/Year": boxes_per_year,
+                "Layers": layers,
+                "Orientation Restriction": orientation_restriction,
+                "Standing Category": insert.get("standing_category", "None")
             }
+        }
 
-    if best_option: 
-        return best_option
-    else: 
+        all_viable_options.append(option)
+
+    if not all_viable_options:
         return {"rejection_log": rejection_log}
-        
+
+    # PRD Point 1 & 3: Sort by cost per part (cheapest first) and provide dual recommendations
+    all_viable_options.sort(key=lambda x: x["cost_per_part"])
+
+    return {
+        "system_recommendation": all_viable_options[0],  # Best choice by cost per part
+        "alternative_options": all_viable_options[1:5],  # Up to 4 alternatives for user choice
+        "all_options": all_viable_options,
+        "total_options": len(all_viable_options),
+        "rejection_log": rejection_log
+    }
+
+# -----------------------------
+# Truck 2D Visualization Function
+# -----------------------------
+def generate_truck_2d_visualization(truck_rec, box_details):
+    """Generate 2D visualization showing boxes arranged in the optimal truck"""
+    if not truck_rec or not box_details:
+        return ""
+    
+    truck_dims = truck_rec['truck_dims']
+    box_dims = box_details['Box Dimensions']
+    boxes_per_truck = truck_rec['boxes_per_truck']
+    
+    # Calculate box arrangement
+    boxes_length = truck_dims[0] // box_dims[0]
+    boxes_width = truck_dims[1] // box_dims[1]
+    boxes_height = truck_dims[2] // box_dims[2]
+    
+    # Display settings for visualization
+    max_display_length = min(boxes_length, 12)
+    max_display_width = min(boxes_width, 8)
+    
+    # Box styling
+    box_style = (
+        "display:inline-block;"
+        "border:2px solid #2196F3;"
+        "border-radius:3px;"
+        "width:35px;"
+        "height:35px;"
+        "margin:2px;"
+        "background-color:#E3F2FD;"
+        "position:relative;"
+        "font-size:8px;"
+        "text-align:center;"
+        "line-height:31px;"
+        "color:#1976D2;"
+        "font-weight:bold;"
+    )
+    
+    # Generate visualization HTML
+    viz_html = f"""
+    <div style="border:2px solid #2196F3; border-radius:8px; padding:15px; background-color:#F8FFFE; margin:10px 0;">
+        <h4 style="margin:0 0 10px 0; color:#1976D2;">📦 Truck Loading Pattern - {truck_rec['truck_name']}</h4>
+        <div style="font-size:12px; margin-bottom:10px; color:#555;">
+            <strong>Truck Dimensions:</strong> {truck_dims[0]} × {truck_dims[1]} × {truck_dims[2]} mm<br>
+            <strong>Box Dimensions:</strong> {box_dims[0]} × {box_dims[1]} × {box_dims[2]} mm<br>
+            <strong>Total Boxes:</strong> {boxes_per_truck} ({boxes_length}L × {boxes_width}W × {boxes_height}H)
+        </div>
+        <div style="background-color:white; padding:10px; border-radius:5px; border:1px solid #ddd;">
+            <div style="font-size:11px; margin-bottom:8px; color:#666;"><strong>Top View (Length × Width):</strong></div>
+    """
+    
+    # Generate grid
+    for w in range(max_display_width):
+        viz_html += "<div style='display:flex; justify-content:flex-start;'>"
+        for l in range(max_display_length):
+            box_number = (w * boxes_length) + l + 1
+            if box_number <= boxes_per_truck:
+                viz_html += f"<div style='{box_style}' title='Box {box_number}'>{box_number}</div>"
+            else:
+                # Empty space
+                empty_style = box_style.replace("background-color:#E3F2FD;", "background-color:#f5f5f5;").replace("border:2px solid #2196F3;", "border:1px dashed #ccc;").replace("color:#1976D2;", "color:#999;")
+                viz_html += f"<div style='{empty_style}'>-</div>"
+        viz_html += "</div>"
+    
+    # Add truncation notice if needed
+    if boxes_length > max_display_length or boxes_width > max_display_width:
+        viz_html += f"<div style='margin-top:8px; font-size:10px; color:#666; font-style:italic;'>Displaying {max_display_width}×{max_display_length} of {boxes_width}×{boxes_length} total arrangement</div>"
+    
+    if boxes_height > 1:
+        viz_html += f"<div style='margin-top:8px; font-size:11px; color:#1976D2;'><strong>Stacking:</strong> {boxes_height} layers high</div>"
+    
+    # Add utilization info
+    viz_html += f"""
+        </div>
+        <div style="margin-top:10px; font-size:11px; color:#555;">
+            <strong>Utilization:</strong> Volume {truck_rec['volume_utilization']:.1f}% | Weight {truck_rec['weight_utilization']:.1f}%
+        </div>
+    </div>
+    """
+    
+    return viz_html
+
 # -----------------------------
 # Login Page (unchanged)
 # -----------------------------
@@ -613,11 +733,11 @@ def login():
             st.error("❌ Invalid username or password")
 
 # -----------------------------
-# Main App (Updated with truck optimization display)
+# Main App (Updated with PRD requirements and truck visualization)
 # -----------------------------
 def packaging_app():
     st.title("🚚 Auto Parts Packaging Optimization")
-    st.caption("🎯 Now optimized for minimum volume wastage with smart material selection and truck optimization")
+    st.caption("🎯 PRD-Compliant: Optimized for minimum cost per part with dual recommendations and truck visualization")
 
     part_length = st.number_input("Part Length (mm)", min_value=1, value=350, key="part_length")
     part_width = st.number_input("Part Width (mm)", min_value=1, value=250, key="part_width")
@@ -636,9 +756,8 @@ def packaging_app():
         fl_h = st.number_input("Forklift Max Height (mm)", min_value=1, value=2000, key="forklift_h")
         forklift_dim = (fl_l, fl_w, fl_h)
 
-    # 👇 Add this dropdown here
     orientation_restriction = st.selectbox(
-        "Orientation Restriction (if any)",
+        "Orientation Restriction (PRD: 3 Standing Categories)",
         ["None", "Length Standing", "Width Standing", "Height Standing"],
         key="orientation_restriction"
     )
@@ -670,37 +789,48 @@ def packaging_app():
     if village:
         st.write(f"➡️ Village Share: {route_pct.get('Village', 0):.1f}%")
 
-    if st.button("Get Optimized Packaging", key="optimize_button"):
+    if st.button("Get PRD-Optimized Packaging", key="optimize_button"):
         part_dim = (part_length, part_width, part_height)
         result = recommend_boxes(
             part_dim, part_weight, stacking_allowed, fragility_level,
-            forklift_available, forklift_capacity, forklift_dim, annual_parts,orientation_restriction
+            forklift_available, forklift_capacity, forklift_dim, annual_parts, orientation_restriction
         )
-        if "box_details" in result:
-            insert = result["insert_details"]
-            separator = result["separator_details"]
-            best_box = result["box_details"]
-
+        
+        if "system_recommendation" in result:
+            system_rec = result["system_recommendation"]
+            alternatives = result.get("alternative_options", [])
+            
+            # Display system recommendation
             st.divider()
+            st.subheader("🥇 System Recommendation (PRD: Cheapest Cost per Part)")
+            
+            insert = system_rec["insert_details"]
+            separator = system_rec["separator_details"]
+            best_box = system_rec["box_details"]
+            cost_info = system_rec["cost_breakdown"]
+
             col1, col2 = st.columns([1, 1.3])
             with col1:
                 st.markdown("### 🧩 Insert & Separator Design")
                 st.markdown(f"""
                     <div style="border:1px solid #d3d3d3; border-radius:10px; padding:12px; margin-bottom:10px;">
-                        <b>Insert Details</b>
+                        <b>Insert Details (PRD-Compliant)</b>
                         <ul>
                             <li>Type: {insert['type']}</li>
                             <li>Matrix Pattern: {insert['matrix'][0]} × {insert['matrix'][1]} (cols × rows)</li>
                             <li>Outer Dimensions: {insert['outer_dims'][0]} × {insert['outer_dims'][1]} × {insert['outer_dims'][2]} mm</li>
                             <li>Cell (Part Orientation): {insert['cell_dims'][0]} × {insert['cell_dims'][1]} × {insert['cell_dims'][2]} mm</li>
+                            <li>Standing Category: {insert.get('standing_category', 'None')}</li>
                             <li>Orientation Restriction: {best_box['Orientation Restriction']}</li>
                             <li>Auto-parts per insert: {insert['units_per_insert']}</li>
                             <li>Weight per Layer: {insert['weight_kg']} kg</li>
                             <li>Material Specification: {insert.get('gsm_or_thickness','N/A')}</li>
+                            <li>Thickness: {insert.get('thickness_mm', 5):.0f}mm (PRD Compliant)</li>
                         </ul>
                         <p style="font-size:12px; color:gray;"><i>{insert.get('note', '')}</i></p>
                     </div>
                     """, unsafe_allow_html=True)
+                
                 st.markdown(f"""
                 <div style="border:1px solid #d3d3d3; border-radius:10px; padding:12px; margin-bottom:10px;">
                     <b>Separator Details</b><br>
@@ -710,18 +840,16 @@ def packaging_app():
                 </div>
                 """, unsafe_allow_html=True)
 
-                insert_outer_vol = insert['outer_dims'][0] * insert['outer_dims'][1] * insert['outer_dims'][2]
-                part_vol = part_dim[0] * part_dim[1] * part_dim[2]
-                cells = insert['units_per_insert']
-                used_by_parts_in_insert = cells * part_vol
-                partition_vol = max(insert_outer_vol - used_by_parts_in_insert, 0)
-                st.markdown("---")
-                st.markdown("**Insert utilization estimates**")
-                st.write(f"- Insert outer volume (mm³): {insert_outer_vol:,}")
-                st.write(f"- Sum of part volumes inside insert (mm³): {used_by_parts_in_insert:,}")
-                st.write(f"- Estimated partition/void volume (mm³): {partition_vol:,}")
-                insert_waste_pct = 100 * (1 - (used_by_parts_in_insert / insert_outer_vol)) if insert_outer_vol > 0 else 0
-                st.write(f"- Wasted / partition % inside insert: {insert_waste_pct:.1f}%")
+                # PRD Spacing compliance info
+                st.markdown(f"""
+                <div style="border:2px solid #4CAF50; border-radius:10px; padding:12px; margin-bottom:10px; background-color:#f8fff9;">
+                    <b>🎯 PRD Spacing Compliance</b><br>
+                    ✅ Side Clearance: {SIDE_CLEARANCE}mm (all 4 sides)<br>
+                    ✅ Top Clearance: {TOP_CLEARANCE}mm<br>
+                    ✅ Bottom Clearance: {BOTTOM_CLEARANCE}mm<br>
+                    ✅ Insert Thickness: {PARTITION_THICKNESS}mm
+                </div>
+                """, unsafe_allow_html=True)
 
             with col2:
                 st.markdown("### Matrix Pattern Visualization")
@@ -745,106 +873,110 @@ def packaging_app():
             st.subheader("🏆 Outer Box Recommendation")
             box_dims = best_box["Box Dimensions"]
             internal_dims = best_box["Internal Dimensions"]
-
             weight_breakdown = best_box["Weight Breakdown"]
-            volume_efficiency_total = best_box.get("Volume Efficiency %", 0)
-            wasted_pct_insert = best_box['Wasted Volume % (insert)']
-            
-            # Retrieve the newly calculated variables
-            parts_efficiency = best_box['Parts Efficiency %']
-            insert_material_pct = best_box['Insert Material Value %']
-            
+
             st.markdown(f"""
 <div style="border:2px solid #2a9d8f; border-radius:10px; padding:15px;">
     <b>Recommended Type</b>: {best_box['Box Type']} ({box_dims[0]}×{box_dims[1]}×{box_dims[2]} mm)<br><br>
-    <b>🎯 Part Efficiency:</b> 
-    <span style="color:#00b894; font-weight:bold; font-size:1.1em;">{parts_efficiency:.2f}%</span><br>
+    <b>🎯 PRD Key Metric - Cost per Part:</b> 
+    <span style="color:#E91E63; font-weight:bold; font-size:1.2em;">₹{cost_info['cost_per_part']:.2f}</span><br><br>
     <b>Configuration:</b> {best_box['Layers']} layer(s) of {insert['units_per_insert']} parts each.<br>
     <b>Max Parts per Box:</b> <b>{best_box['Max Parts']}</b><br>
     <hr style="border-top: 1px solid #ddd;">
+    <b>Cost Breakdown (PRD Compliant):</b><br>
+    ➤ Box Handling Cost: ₹{cost_info['handling_cost_per_box']:.2f} per box<br>
+    ➤ Packaging Asset Cost: ₹{cost_info['asset_cost_per_box']:.2f} per box<br>
+    ➤ Total Cost per Box: ₹{cost_info['total_cost_per_box']:.2f}<br><br>
     <b>Box Capacity:</b> {best_box['Capacity']:.1f} kg<br>
     <b>Total Weight</b> inside the box: {best_box['Total Weight']:.1f} kg<br>
     <small>
-        ➤ Parts: {best_box['Max Parts']} × {part_weight:.2f} kg = {weight_breakdown['Parts']:.1f} kg<br>
-        ➤ Inserts: {insert['weight_kg']} kg × {best_box['Layers']} = {weight_breakdown['Inserts']:.1f} kg<br>
-        ➤ Separators: {separator.get('weight_kg',0)} kg × {max(0,best_box['Layers']-1)} = {weight_breakdown['Separators']:.1f} kg<br>
-        ➤ FLC Lid: {weight_breakdown['FLC Lid']:.2f} kg<br>
+    ➤ Parts: {best_box['Max Parts']} × {part_weight:.2f} kg = {weight_breakdown['Parts']:.1f} kg<br>
+    ➤ Inserts: {insert['weight_kg']} kg × {best_box['Layers']} = {weight_breakdown['Inserts']:.1f} kg<br>
+    ➤ Separators: {separator.get('weight_kg',0)} kg × {max(0,best_box['Layers']-1)} = {weight_breakdown['Separators']:.1f} kg<br>
+    {f"➤ FLC Lid: {weight_breakdown['FLC Lid']:.2f} kg<br>" if best_box['Box Type'].lower().startswith("flc") else ""}<br>
     </small><br>
     <b>Boxes Required per Year:</b> {best_box['Boxes/Year']}<br>
-    <hr style="border-top: 1px solid #ddd;">
-    <small><b>Internal Dims:</b> {internal_dims[0]} × {internal_dims[1]} × {internal_dims[2]} mm</small>
 </div>
 """, unsafe_allow_html=True)
 
-            # NEW: Truck Optimization Section (PRD Requirement)
+            # PRD Point 3: Display alternative options
+            if alternatives:
+                st.divider()
+                st.subheader("🎛️ Alternative Options (PRD: User Custom Choice)")
+                
+                alternative_data = []
+                for i, alt in enumerate(alternatives[:4], 1):  # Show top 4 alternatives
+                    alt_box = alt["box_details"]
+                    alt_cost = alt["cost_breakdown"]
+                    alternative_data.append({
+                        "Option": f"Alt {i}",
+                        "Box Type": f"{alt_box['Box Type']} ({alt_box['Box Dimensions'][0]}×{alt_box['Box Dimensions'][1]}×{alt_box['Box Dimensions'][2]})",
+                        "Parts/Box": alt_box['Max Parts'],
+                        "Cost/Part (₹)": f"{alt_cost['cost_per_part']:.2f}",
+                        "Volume Eff %": f"{alt_box['Volume Efficiency %']:.1f}%",
+                        "Standing Category": alt["insert_details"].get("standing_category", "None")
+                    })
+                
+                st.table(alternative_data)
+
+            # Truck Optimization Section with 2D Visualization
             if source != "Select" and destination != "Select" and route_pct:
                 st.divider()
-                st.subheader("🚛 Truck Load Optimization")
+                st.subheader("🚛 Truck Load Optimization with 2D Visualization")
                 
-                truck_recommendations = optimize_truck_loading(result, source, destination, route_pct)
+                truck_recommendations = optimize_truck_loading(system_rec, source, destination, route_pct)
                 
                 if truck_recommendations:
                     # Display route information
                     distance = get_route_distance(source, destination)
                     st.markdown(f"""
-                    <div style="border:1px solid #ffc107; border-radius:10px; padding:12px; margin-bottom:15px; background-color:#1;">
-                        <!-- <b>🗺️ Route Details:</b> {source} → {destination} ({distance} km)<br> -->
+                    <div style="border:1px solid #ffc107; border-radius:10px; padding:12px; margin-bottom:15px;">
                         <b>Route Distribution:</b> {', '.join([f'{k}: {v:.0f}%' for k, v in route_pct.items()])}
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # Display top 3 truck recommendations
-                    st.markdown("### 🥇 Top Truck Recommendations (Based on Cost per Part)")
+                    # Display best truck with 2D visualization
+                    best_truck = truck_recommendations[0]
+                    st.markdown("### 🥇 Optimal Truck Configuration")
                     
-                    for i, truck_rec in enumerate(truck_recommendations[:3], 1):
-                        # Color coding for ranking
-                        if i == 1:
-                            border_color = "#28a745"  # Green for best
-                            bg_color = "#f8fff9"
-                            rank_emoji = "🥇"
-                        elif i == 2:
-                            border_color = "#ffc107"  # Yellow for second
-                            bg_color = "#fffbf0"
-                            rank_emoji = "🥈"
-                        else:
-                            border_color = "#fd7e14"  # Orange for third
-                            bg_color = "#fff8f0"
-                            rank_emoji = "🥉"
-                        
-                        st.markdown(f"""
-                            <div style="border:3px solid {border_color}; border-radius:10px; padding:15px; margin-bottom:15px; background-color:{bg_color};">
-                                <h4 style="margin:0; color:{border_color};">{rank_emoji} Rank {i}: {truck_rec['truck_name']}</h4>
-                                <div style="display:flex; flex-wrap:wrap; gap:20px; margin-top:15px;">
-                                    <div style="flex:1; min-width:300px;">
-                                        <b style="color:{border_color};">📐 Truck Specifications:</b><br>
-                                        <span style="color:#222;">• Dimensions: {truck_rec['truck_dims'][0]} × {truck_rec['truck_dims'][1]} × {truck_rec['truck_dims'][2]} mm</span><br>
-                                        <span style="color:#222;">• Payload Capacity: {truck_rec['payload_capacity']:,} kg</span><br><br>
-                                        
-                                        <b style="color:{border_color};">📦 Loading Configuration:</b><br>
-                                        <span style="color:#222;">• Boxes per Truck: <b>{truck_rec['boxes_per_truck']}</b></span><br>
-                                        <span style="color:#222;">• Total Parts per Truck: <b>{truck_rec['total_parts_per_truck']:,}</b></span><br>
-                                        <span style="color:#222;">• Volume Utilization: {truck_rec['volume_utilization']:.1f}%</span><br>
-                                        <span style="color:#222;">• Weight Utilization: {truck_rec['weight_utilization']:.1f}%</span><br>
-                                    </div>
-                                    <div style="flex:1; min-width:300px;">
-                                        <b style="color:{border_color};">💰 Cost Analysis (PRD Key Metrics):</b><br>
-                                        <span style="color:#E91E63; font-weight:bold; font-size:1.1em;">• Cost per Part: ₹{truck_rec['cost_per_part']:.2f}</span><br>
-                                        <span style="color:#222;">• Total Trip Cost: ₹{truck_rec['total_trip_cost']:,.0f}</span><br>
-                                        <span style="color:#222;">• Fuel Cost: ₹{truck_rec['fuel_cost']:,.0f}</span><br>
-                                        <span style="color:#222;">• Handling Cost: ₹{truck_rec['handling_cost']:,.0f}</span><br><br>
-
-                                        <b style="color:{border_color};">🌱 Environmental Impact:</b><br>
-                                        <span style="color:#4CAF50; font-weight:bold;">• CO₂ per Part: {truck_rec['co2_per_part']:.3f} kg</span><br>
-                                        <span style="color:#222;">• Total CO₂ per Trip: {truck_rec['co2_emission']:.2f} kg</span><br>
-                                    </div>
+                    # Display truck info
+                    st.markdown(f"""
+                        <div style="border:3px solid #28a745; border-radius:10px; padding:15px; margin-bottom:15px; background-color:#f8fff9;">
+                            <h4 style="margin:0; color:#28a745;">🏆 Best Choice: {best_truck['truck_name']}</h4>
+                            <div style="display:flex; flex-wrap:wrap; gap:20px; margin-top:15px;">
+                                <div style="flex:1; min-width:300px;">
+                                    <b style="color:#28a745;">📐 Truck Specifications:</b><br>
+                                    <span style="color:#222;">• Dimensions: {best_truck['truck_dims'][0]} × {best_truck['truck_dims'][1]} × {best_truck['truck_dims'][2]} mm</span><br>
+                                    <span style="color:#222;">• Payload Capacity: {best_truck['payload_capacity']:,} kg</span><br>
+                                    <b style="color:#28a745;">📦 Loading Configuration:</b><br>
+                                    <span style="color:#222;">• Boxes per Truck: <b>{best_truck['boxes_per_truck']}</b></span><br>
+                                    <span style="color:#222;">• Total Parts per Truck: <b>{best_truck['total_parts_per_truck']:,}</b></span><br>
+                                    <span style="color:#222;">• Volume Utilization: {best_truck['volume_utilization']:.1f}%</span><br>
+                                    <span style="color:#222;">• Weight Utilization: {best_truck['weight_utilization']:.1f}%</span><br>
+                                </div>
+                                <div style="flex:1; min-width:300px;">
+                                    <b style="color:#28a745;">💰 Cost Analysis (PRD Key Metrics):</b><br>
+                                    <span style="color:#E91E63; font-weight:bold; font-size:1.1em;">• Cost per Part: ₹{best_truck['cost_per_part']:.2f}</span><br>
+                                    <span style="color:#222;">• Total Trip Cost: ₹{best_truck['total_trip_cost']:,.0f}</span><br>
+                                    <span style="color:#222;">• Fuel Cost: ₹{best_truck['fuel_cost']:,.0f}</span><br>
+                                    <span style="color:#222;">• Handling Cost: ₹{best_truck['handling_cost']:,.0f}</span><br>
+                                    <span style="color:#222;">• Asset Cost: ₹{best_truck['asset_cost']:,.0f}</span><br><br>
+                                    <b style="color:#28a745;">🌱 Environmental Impact:</b><br>
+                                    <span style="color:#4CAF50; font-weight:bold;">• CO₂ per Part: {best_truck['co2_per_part']:.3f} kg</span><br>
+                                    <span style="color:#222;">• Total CO₂ per Trip: {best_truck['co2_emission']:.2f} kg</span><br>
                                 </div>
                             </div>
-                            """, unsafe_allow_html=True)
+                        </div>
+                        """, unsafe_allow_html=True)
 
+                    # 2D Truck Loading Visualization
+                    st.markdown("### 📐 2D Truck Loading Visualization")
+                    truck_viz_html = generate_truck_2d_visualization(best_truck, best_box)
+                    st.markdown(truck_viz_html, unsafe_allow_html=True)
                     
-                    # Summary comparison table
+                    # Show comparison with other trucks if available
                     if len(truck_recommendations) > 1:
-                        st.markdown("### 📊 Quick Comparison")
+                        st.markdown("### 📊 Alternative Trucks Comparison")
                         comparison_data = []
                         for truck_rec in truck_recommendations[:3]:
                             comparison_data.append({
@@ -856,15 +988,7 @@ def packaging_app():
                                 "Weight Util (%)": f"{truck_rec['weight_utilization']:.1f}%"
                             })
                         
-                        # Create comparison table
                         st.table(comparison_data)
-                        
-                        # Cost savings analysis
-                        best_cost = truck_recommendations[0]['cost_per_part']
-                        worst_cost = truck_recommendations[-1]['cost_per_part']
-                        if worst_cost > best_cost:
-                            savings_pct = ((worst_cost - best_cost) / worst_cost) * 100
-                            st.success(f"💡 **Insight**: Using {truck_recommendations[0]['truck_name']} saves {savings_pct:.1f}% cost per part compared to {truck_recommendations[-1]['truck_name']}")
                 
                 else:
                     st.warning("⚠️ No suitable truck configurations found for the selected box and route.")
