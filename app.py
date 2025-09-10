@@ -108,6 +108,8 @@ TOP_CLEARANCE = 5         # PRD: 5mm space on top
 BOTTOM_CLEARANCE = 0      # PRD: 0mm space on bottom
 PARTITION_THICKNESS = 5   # PRD: Insert thickness 5mm or 6mm (using 5mm)
 
+ERGONOMIC_LIFT_KG = 15.0  # adjust per your safety guidelines
+
 # -----------------------------
 # Helpers (updated with PRD spacing)
 # -----------------------------
@@ -471,6 +473,17 @@ def get_separator_details(insert, stacking_allowed):
         return {"needed": True, "type": "Honeycomb Layer Pad", "weight_kg": 1.49, "note": "Adds strength between stacked layers."}
     else:
         return {"needed": True, "type": "PP Sheet Separator", "weight_kg": 1.0, "note": "General separator for multiple layers."}
+def check_ergonomic_limit(total_weight: float) -> Tuple[bool, str]:
+    """
+    Check if a packed box exceeds ergonomic lift guidelines.
+    Returns (ok, message). If not ok, message explains why.
+    """
+    if total_weight > ERGONOMIC_LIFT_KG:
+        return False, (
+            f"Rejected: Package weight {total_weight:.2f} kg exceeds ergonomic lift limit "
+            f"({ERGONOMIC_LIFT_KG} kg)."
+        )
+    return True, "OK"
 
 def calculate_cost_per_part(box, insert, separator, layers, fit_count, annual_parts, route_info):
     """Calculate cost per part per trip as per PRD requirement (Point 1)"""
@@ -483,7 +496,9 @@ def calculate_cost_per_part(box, insert, separator, layers, fit_count, annual_pa
     part_total_weight = fit_count * route_info.get("part_weight", 1.0)
     box_empty_mass = getattr(box, "empty_weight_kg", 0.0)
     total_weight = part_total_weight + insert_weight_total + separator_weight_total + box_empty_mass
-    
+
+
+
     # Estimated cost per part (simplified for box selection)
     handling_cost = BOX_HANDLING_COST.get(box.box_type, 40)
     asset_cost = getattr(box, "asset_cost", 0.0)
@@ -771,6 +786,26 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
         separator_weight_total = separator["weight_kg"] * max(0, layers - 1)
         box_empty_mass = getattr(box, "empty_weight_kg", 0.0)
         total_weight = part_total_weight + insert_weight_total + separator_weight_total + box_empty_mass
+        # --- ergonomic safety check ---
+        total_weight = part_total_weight + insert_weight_total + separator_weight_total + box_empty_mass
+
+# --- ergonomic safety check ---
+        if not forklift_available:   # apply only if no forklift
+            ok, msg = check_ergonomic_limit(total_weight)
+            if not ok:
+                rejection_log[log_key] = msg
+                continue
+
+        # --- forklift capacity check ---
+        if forklift_available and forklift_capacity is not None:
+            if total_weight > forklift_capacity:
+                rejection_log[log_key] = (
+                    f"Rejected: Package weight {total_weight:.2f} kg exceeds forklift capacity "
+                    f"({forklift_capacity} kg)."
+                )
+                continue
+
+
 
         # Adjust fit_count if overweight
         while fit_count > 0 and total_weight > box.capacity_kg:
