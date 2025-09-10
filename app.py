@@ -39,7 +39,7 @@ BOX_DATABASE: List[Box] = [
     # Foldable Crate (explicit type in DB) - matches PRD small crate sizes
     Box("Foldable Crate", (600, 400, 348), 15, 1.9, 1200),
 
-    # FLCs (PRD: includes lid weight ~5.13 kg; typical total empty mass often in 4-9 kg range)
+    # FLCs (PRD: includes lid weight ~5.13 kg; t    ypical total empty mass often in 4-9 kg range)
     Box("FLC", (1200, 1000, 595), 700, 6.8, 2500),    # standard FLC (includes lid mass)
     Box("FLC", (1200, 1000, 1200), 1000, 10.5, 3200), # taller FLC variant
 
@@ -717,19 +717,20 @@ def explain(record, validation):
     max_parts = box.get("Max Parts", "N/A")
     total_weight = box.get("Total Weight", "N/A")
     capacity = box.get("Capacity", "N/A")
-    vol_eff = box.get("Volume Efficiency %", box.get("Part Volume Efficiency %", "N/A"))
-
+    parts_eff = box.get("Parts Efficiency %", "N/A")
+    insert_overhead = box.get("Insert Overhead %", "N/A")
+    box_used = box.get("Box Used %", "N/A")
     errors_text = ""
     if validation.get("errors"):
         errors_text = " — Errors: " + "; ".join(validation["errors"])
 
     summary = (
-        f"📦 Recommended Box: {box_type} {box_dims}\n"
-        f"• Max Parts: {max_parts}\n"
-        f"• Total Weight: {total_weight} / {capacity} kg\n"
-        f"• Volume Efficiency: {vol_eff}\n"
-        f"• Validation: {validation['status']}{errors_text}"
-    )
+    f"📦 Recommended Box: {box_type} {box_dims}\n"
+    f"• Max Parts: {max_parts}\n"
+    f"• Total Weight: {total_weight} / {capacity} kg\n"
+    f"• Parts Efficiency: {parts_eff:.1f}% | Insert Overhead: {insert_overhead:.1f}% | Box Used: {box_used:.1f}%\n"
+    f"• Validation: {validation['status']}{errors_text}"
+)
     return summary
 
 
@@ -834,12 +835,14 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
         insert_outer_vol = insert["outer_dims"][0] * insert["outer_dims"][1] * insert["outer_dims"][2]
         used_volume_insert = insert_outer_vol * layers
 
-        wasted_pct_parts = 100 * (1 - (used_volume_parts / box_volume)) if box_volume > 0 else 100
-        wasted_pct_insert = 100 * ((used_volume_insert - used_volume_parts) / box_volume) if box_volume > 0 and used_volume_insert > used_volume_parts else 0
-        volume_efficiency_total = 100 - wasted_pct_parts - wasted_pct_insert
+                # --- New Efficiency Metrics ---
+        parts_efficiency_pct = (used_volume_parts / box_volume) * 100 if box_volume > 0 else 0
+        insert_overhead_pct = ((used_volume_insert - used_volume_parts) / box_volume) * 100 if box_volume > 0 and used_volume_insert > used_volume_parts else 0
+        box_used_pct = min(100, parts_efficiency_pct + insert_overhead_pct)  # never exceed 100%
 
+        # Optional: how much of insert is "wasted" vs useful
         insert_material_pct = 100 * ((used_volume_insert - used_volume_parts) / used_volume_insert) if used_volume_insert > 0 else 0
-        combined_efficiency = volume_efficiency_total + insert_material_pct
+
 
         boxes_per_year = -(-annual_parts // fit_count) if fit_count > 0 else 0
 
@@ -858,15 +861,16 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
                     "Parts": part_total_weight,
                     "Inserts": insert_weight_total,
                     "Separators": separator_weight_total,
-                    "FLC Lid": box_empty_mass
+                    "Box": box_empty_mass
                 },
                 "Capacity": box.capacity_kg,
                 "Asset Cost": getattr(box, "asset_cost", 0.0),
-                "Wasted Volume % (parts)": wasted_pct_parts,
-                "Wasted Volume % (insert)": wasted_pct_insert,
-                "Volume Efficiency %": volume_efficiency_total,
-                "Parts Efficiency %": combined_efficiency,
+                "Parts Efficiency %": parts_efficiency_pct,
+                "Insert Overhead %": insert_overhead_pct,
+                "Box Used %": box_used_pct,
                 "Insert Material Value %": insert_material_pct,
+
+
                 "Insert Outer Volume (mm^3)": insert_outer_vol,
                 "Boxes/Year": boxes_per_year,
                 "Layers": layers,
@@ -890,6 +894,7 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
         "total_options": len(all_viable_options),
         "rejection_log": rejection_log
     }
+
 
 # -----------------------------
 # Truck 2D Visualization Function
@@ -1183,8 +1188,11 @@ def packaging_app():
                 ➤ Parts: {best_box['Max Parts']} × {part_weight:.2f} kg = {weight_breakdown['Parts']:.1f} kg<br>
                 ➤ Inserts: {insert['weight_kg']} kg × {best_box['Layers']} = {weight_breakdown['Inserts']:.1f} kg<br>
                 ➤ Separators: {separator.get('weight_kg',0)} kg × {max(0,best_box['Layers']-1)} = {weight_breakdown['Separators']:.1f} kg<br>
-                {f"➤ FLC Lid: {weight_breakdown['FLC Lid']:.2f} kg<br>" if best_box['Box Type'].lower().startswith("flc") else ""}<br>
+                ➤ Box: {weight_breakdown['Box']:.2f} kg<br>
                 </small><br>
+                <b>Parts Efficiency:</b> {best_box['Parts Efficiency %']:.1f}%<br>
+                <b>Insert Overhead:</b> {best_box['Insert Overhead %']:.1f}%<br>
+                <b>Box Used:</b> {best_box['Box Used %']:.1f}%<br>
                 <b>Boxes Required per Year:</b> {best_box['Boxes/Year']}<br>
             </div>
             """, unsafe_allow_html=True)
@@ -1203,7 +1211,10 @@ def packaging_app():
                         "Box Type": f"{alt_box['Box Type']} ({alt_box['Box Dimensions'][0]}×{alt_box['Box Dimensions'][1]}×{alt_box['Box Dimensions'][2]})",
                         "Parts/Box": alt_box['Max Parts'],
                         "Cost/Part (₹)": f"{alt_cost['cost_per_part']:.2f}",
-                        "Volume Eff %": f"{alt_box['Volume Efficiency %']:.1f}%",
+                        "Parts Eff %": f"{alt_box['Parts Efficiency %']:.1f}%",
+                        "Insert Overhead %": f"{alt_box['Insert Overhead %']:.1f}%",
+                        "Box Used %": f"{alt_box['Box Used %']:.1f}%",
+
                         "Standing Category": alt["insert_details"].get("standing_category", "None")
                     })
                 
