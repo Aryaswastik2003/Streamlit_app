@@ -1,7 +1,10 @@
 import streamlit as st
+import pandas as pd
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 import math
+import json
+import os
 
 # -----------------------------
 # Data Models & Constants (updated with PRD requirements)
@@ -496,6 +499,226 @@ def calculate_cost_per_part(box, insert, separator, layers, fit_count, annual_pa
     }
     
     return cost_per_part, cost_breakdown
+import json, os, pandas as pd
+
+LOG_FILE = "results_log.json"
+
+def log_result(result: dict):
+    """Append a new result to results_log.json (safe, even if file is empty/corrupted)."""
+    if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) > 0:
+        with open(LOG_FILE, "r") as f:
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                data = []  # reset if corrupted
+    else:
+        data = []
+
+    data.append(result)
+
+    with open(LOG_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+
+
+def validate_results():
+    """Validate all recorded results in results_log.json"""
+    if not os.path.exists(LOG_FILE):
+        return []
+
+    with open(LOG_FILE, "r") as f:
+        data = json.load(f)
+
+    validation_report = []
+    for i, result in enumerate(data, start=1):
+        box = result.get("box_details", {})
+        errors = []
+        if not box:
+            errors.append("❌ Missing box details")
+        else:
+            if box.get("Total Weight", 0) > box.get("Capacity", float('inf')):
+                errors.append("❌ Over capacity")
+            if box.get("Max Parts", 0) <= 0:
+                errors.append("❌ No parts fit in box")
+            if box.get("Volume Efficiency %", 0) <= 0:
+                errors.append("❌ Invalid efficiency")
+
+        validation_report.append({
+            "Result #": i,
+            "Box Type": box.get("Box Type", "N/A"),
+            "Status": "✅ Valid" if not errors else "⚠️ Issues",
+            "Errors": errors
+        })
+
+    return validation_report
+
+
+def export_results_to_csv():
+    """Export both inputs and outputs to a CSV table."""
+    if not os.path.exists(LOG_FILE):
+        return None
+    
+    with open(LOG_FILE, "r") as f:
+        data = json.load(f)
+    
+    flat_data = []
+    for i, r in enumerate(data, start=1):
+        inputs = r.get("inputs", {})
+        box = r.get("box_details") or (r.get("outputs") or {}).get("box_details", {})
+        
+        row = {
+            "Result #": i,
+            # Inputs
+            "Part Dim (mm)": inputs.get("Part Dim (mm)", ""),
+            "Part Weight (kg)": inputs.get("Part Weight (kg)", ""),
+            "Fragility": inputs.get("Fragility", ""),
+            "Stacking Allowed": inputs.get("Stacking Allowed", ""),
+            "Forklift Available": inputs.get("Forklift Available", ""),
+            "Forklift Capacity": inputs.get("Forklift Capacity", ""),
+            "Forklift Dim": inputs.get("Forklift Dim", ""),
+            "Annual Parts": inputs.get("Annual Parts", ""),
+            "Orientation Restriction": inputs.get("Orientation Restriction", ""),
+            # Outputs
+            "Box Type": box.get("Box Type", ""),
+            "Box Dimensions": "x".join(map(str, box.get("Box Dimensions", []))),
+            "Capacity (kg)": box.get("Capacity", ""),
+            "Total Weight (kg)": box.get("Total Weight", ""),
+            "Max Parts": box.get("Max Parts", ""),
+            "Boxes/Year": box.get("Boxes/Year", ""),
+            "Layers": box.get("Layers", ""),
+            "Part Volume Efficiency %": box.get("Part Volume Efficiency %", ""),
+            "Insert+Part Efficiency %": box.get("Total Volume Efficiency %", ""),
+            "Insert Volume (mm³)": box.get("Insert Volume (mm^3)", ""),
+        }
+        flat_data.append(row)
+    
+    df = pd.DataFrame(flat_data)
+    return df.to_csv(index=False)
+# -----------------------------
+# Agentic helper functions (add these once, above packaging_app)
+# -----------------------------
+def collect_inputs(part_length, part_width, part_height, part_weight,
+                   fragility_level, stacking_allowed,
+                   forklift_available, forklift_capacity, forklift_dim,
+                   annual_parts, orientation_restriction):
+    """Agent A: collect and return a structured inputs dict (keeps a part_dim tuple too)."""
+    return {
+        "Part Dim (mm)": f"{part_length}x{part_width}x{part_height}",
+        "part_dim": (int(part_length), int(part_width), int(part_height)),
+        "Part Weight (kg)": part_weight,
+        "Fragility": fragility_level,
+        "Stacking Allowed": stacking_allowed,
+        "Forklift Available": forklift_available,
+        "Forklift Capacity": forklift_capacity,
+        "Forklift Dim": forklift_dim,
+        "Annual Parts": int(annual_parts),
+        "Orientation Restriction": orientation_restriction,
+    }
+
+
+def optimizer(inputs):
+    """
+    Agent B: call recommend_boxes and RETURN the full response dict so downstream code
+    can access system_recommendation, alternative_options, etc.
+    """
+    part_dim = inputs.get("part_dim")
+    result = recommend_boxes(
+        part_dim,
+        inputs["Part Weight (kg)"],
+        inputs["Stacking Allowed"],
+        inputs["Fragility"],
+        inputs["Forklift Available"],
+        inputs["Forklift Capacity"],
+        inputs["Forklift Dim"],
+        inputs["Annual Parts"],
+        inputs["Orientation Restriction"],
+    )
+
+    # Return full recommend_boxes output unchanged (contains keys:
+    # system_recommendation, alternative_options, all_options, ...)
+    return result
+
+
+
+def validate_record(record):
+    """
+    Agent C: validate a single logged record (record is {'inputs':..., 'outputs':...} or similar).
+    Returns dict with status and listed errors.
+    """
+    # outputs may be under record["outputs"] or record["box_details"] depending on how it's logged
+    outputs = record.get("outputs") or record.get("box_details") or record.get("system_recommendation") or {}
+    # if outputs itself contains box_details (system_recommendation style)
+    box = outputs.get("box_details") if isinstance(outputs, dict) and "box_details" in outputs else outputs
+
+    errors = []
+
+    if not box or not isinstance(box, dict):
+        errors.append("Missing box details")
+    else:
+        # Weight vs capacity
+        try:
+            total_weight = float(box.get("Total Weight", 0) or 0)
+            capacity = float(box.get("Capacity", float("inf")) or float("inf"))
+            if total_weight > capacity:
+                errors.append("Over capacity: Total Weight > Capacity")
+        except Exception:
+            errors.append("Could not parse Total Weight / Capacity")
+
+        # Max parts
+        try:
+            if int(box.get("Max Parts", 0)) <= 0:
+                errors.append("No parts fit in box (Max Parts ≤ 0)")
+        except Exception:
+            errors.append("Could not parse Max Parts")
+
+        # Volume efficiency - check common keys
+        vol_eff = None
+        for key in ("Part Volume Efficiency %", "Volume Efficiency %", "Total Volume Efficiency %", "Parts Efficiency %"):
+            if key in box:
+                try:
+                    vol_eff = float(box[key])
+                except Exception:
+                    vol_eff = None
+                break
+        if vol_eff is None or vol_eff <= 0:
+            errors.append("Invalid or missing volume efficiency")
+
+    return {"status": "✅ Valid" if not errors else "⚠️ Issues", "errors": errors}
+
+
+def logger(record):
+    """Agent D: wrapper to log the record to your results_log.json using existing log_result."""
+    # use the log_result helper you already defined
+    log_result(record)
+
+
+def explain(record, validation):
+    """Agent E: short human-readable summary used in the UI."""
+    # outputs may be nested (system_recommendation) or direct
+    outputs = record.get("outputs") or record.get("box_details") or {}
+    box = outputs.get("box_details") if isinstance(outputs, dict) and "box_details" in outputs else outputs
+
+    box_type = box.get("Box Type", "N/A")
+    box_dims = box.get("Box Dimensions", "")
+    max_parts = box.get("Max Parts", "N/A")
+    total_weight = box.get("Total Weight", "N/A")
+    capacity = box.get("Capacity", "N/A")
+    vol_eff = box.get("Volume Efficiency %", box.get("Part Volume Efficiency %", "N/A"))
+
+    errors_text = ""
+    if validation.get("errors"):
+        errors_text = " — Errors: " + "; ".join(validation["errors"])
+
+    summary = (
+        f"📦 Recommended Box: {box_type} {box_dims}\n"
+        f"• Max Parts: {max_parts}\n"
+        f"• Total Weight: {total_weight} / {capacity} kg\n"
+        f"• Volume Efficiency: {vol_eff}\n"
+        f"• Validation: {validation['status']}{errors_text}"
+    )
+    return summary
+
+
+
 
 def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift_available,
                     forklift_capacity, forklift_dim, annual_parts, orientation_restriction):
@@ -732,13 +955,15 @@ def login():
         else:
             st.error("❌ Invalid username or password")
 
+
 # -----------------------------
 # Main App (Updated with PRD requirements and truck visualization)
 # -----------------------------
 def packaging_app():
     st.title("🚚 Auto Parts Packaging Optimization")
-    st.caption("🎯 PRD-Compliant: Optimized for minimum cost per part with dual recommendations and truck visualization")
+    st.caption("🎯 Now optimized for minimum volume wastage with smart material selection based on part size")
 
+    # --- Inputs ---
     part_length = st.number_input("Part Length (mm)", min_value=1, value=350, key="part_length")
     part_width = st.number_input("Part Width (mm)", min_value=1, value=250, key="part_width")
     part_height = st.number_input("Part Height (mm)", min_value=1, value=150, key="part_height")
@@ -757,13 +982,14 @@ def packaging_app():
         forklift_dim = (fl_l, fl_w, fl_h)
 
     orientation_restriction = st.selectbox(
-        "Orientation Restriction (PRD: 3 Standing Categories)",
+        "Orientation Restriction (if any)",
         ["None", "Length Standing", "Width Standing", "Height Standing"],
         key="orientation_restriction"
     )
 
     annual_parts = st.number_input("Annual Auto Parts Quantity", min_value=1, step=1000, value=50000, key="annual_qty")
 
+    # --- Route Inputs (unchanged) ---
     st.subheader("Route Information")
     source = st.selectbox("Route Source", LOCATIONS, key="route_source")
     destination = st.selectbox("Route Destination", LOCATIONS, key="route_destination")
@@ -789,65 +1015,94 @@ def packaging_app():
     if village:
         st.write(f"➡️ Village Share: {route_pct.get('Village', 0):.1f}%")
 
-    if st.button("Get PRD-Optimized Packaging", key="optimize_button"):
-        part_dim = (part_length, part_width, part_height)
-        result = recommend_boxes(
-            part_dim, part_weight, stacking_allowed, fragility_level,
-            forklift_available, forklift_capacity, forklift_dim, annual_parts, orientation_restriction
-        )
-        
-        if "system_recommendation" in result:
-            system_rec = result["system_recommendation"]
-            alternatives = result.get("alternative_options", [])
-            
-            # Display system recommendation
-            st.divider()
-            st.subheader("🥇 System Recommendation (PRD: Cheapest Cost per Part)")
-            
-            insert = system_rec["insert_details"]
-            separator = system_rec["separator_details"]
-            best_box = system_rec["box_details"]
-            cost_info = system_rec["cost_breakdown"]
+    # --- Agentic Flow Trigger ---
+    if st.button("Get Optimized Packaging", key="optimize_button"):
 
+        # 🟢 Agent A: Collect Inputs
+        inputs = collect_inputs(
+            part_length, part_width, part_height, part_weight,
+            fragility_level, stacking_allowed,
+            forklift_available, forklift_capacity, forklift_dim,
+            annual_parts, orientation_restriction
+        )
+
+        # 🟡 Agent B: Optimize
+        # 🟡 Agent B: Optimize
+        full_result = optimizer(inputs)  # now optimizer returns the full recommend_boxes() output
+
+        # extract the system recommendation (best option) and alternatives reliably
+        system_rec = None
+        if isinstance(full_result, dict) and "system_recommendation" in full_result:
+            system_rec = full_result["system_recommendation"]
+        else:
+            # fallback: maybe optimizer returned a single option (older shape)
+            system_rec = full_result if isinstance(full_result, dict) and "box_details" in full_result else None
+
+        # If no valid system_rec -> show rejection/log
+        if not system_rec or "box_details" not in system_rec:
+            # keep the original behavior: show rejection_log if available
+            rejection_log = full_result.get("rejection_log", {}) if isinstance(full_result, dict) else {}
+            st.error("❌ No suitable box and insert combination found.", icon="🚨")
+            if not rejection_log:
+                st.info("No boxes were even attempted. This may indicate a problem with the initial inputs.")
+            else:
+                for box_name, reason in rejection_log.items():
+                    st.markdown(f"- **{box_name}**: {reason}")
+            # stop early
+        else:
+            # now we have a valid system_rec (which contains insert_details, box_details, cost_breakdown)
+            alternatives = full_result.get("alternative_options", [])
+            # prepare record to log — put box_details at top-level so CSV exporter sees it
+            record = {
+                "inputs": inputs,
+                "box_details": system_rec.get("box_details", {}),
+                "insert_details": system_rec.get("insert_details", {}),
+                "separator_details": system_rec.get("separator_details", {}),
+                "cost_breakdown": system_rec.get("cost_breakdown", {}),
+                "alternative_options": alternatives
+            }
+            logger(record)  # save a stable, consistent record shape for CSV & validation
+
+            # Validate & Explain
+            validation = validate_record({"box_details": record["box_details"]})
+            summary = explain({"box_details": record["box_details"]}, validation)
+            st.info(summary)
+
+            # set local variables used by the original UI
+            insert = record["insert_details"]
+            separator = record["separator_details"]
+            best_box = record["box_details"]
+            cost_info = record.get("cost_breakdown", {})
+
+    # ⚡ now best_box, cost_info, and alternatives are safe to use below
+
+
+            st.divider()
             col1, col2 = st.columns([1, 1.3])
             with col1:
                 st.markdown("### 🧩 Insert & Separator Design")
                 st.markdown(f"""
                     <div style="border:1px solid #d3d3d3; border-radius:10px; padding:12px; margin-bottom:10px;">
-                        <b>Insert Details (PRD-Compliant)</b>
+                        <b>Insert Details</b>
                         <ul>
                             <li>Type: {insert['type']}</li>
                             <li>Matrix Pattern: {insert['matrix'][0]} × {insert['matrix'][1]} (cols × rows)</li>
                             <li>Outer Dimensions: {insert['outer_dims'][0]} × {insert['outer_dims'][1]} × {insert['outer_dims'][2]} mm</li>
                             <li>Cell (Part Orientation): {insert['cell_dims'][0]} × {insert['cell_dims'][1]} × {insert['cell_dims'][2]} mm</li>
-                            <li>Standing Category: {insert.get('standing_category', 'None')}</li>
                             <li>Orientation Restriction: {best_box['Orientation Restriction']}</li>
                             <li>Auto-parts per insert: {insert['units_per_insert']}</li>
                             <li>Weight per Layer: {insert['weight_kg']} kg</li>
                             <li>Material Specification: {insert.get('gsm_or_thickness','N/A')}</li>
-                            <li>Thickness: {insert.get('thickness_mm', 5):.0f}mm (PRD Compliant)</li>
                         </ul>
                         <p style="font-size:12px; color:gray;"><i>{insert.get('note', '')}</i></p>
                     </div>
-                    """, unsafe_allow_html=True)
-                
+                """, unsafe_allow_html=True)
                 st.markdown(f"""
                 <div style="border:1px solid #d3d3d3; border-radius:10px; padding:12px; margin-bottom:10px;">
                     <b>Separator Details</b><br>
                     Type: {separator['type'] if separator['needed'] else 'Not Required'}<br>
                     Note: {separator.get('note', 'N/A')}<br>
                     Weight per Unit: {separator.get('weight_kg', 'N/A')} kg
-                </div>
-                """, unsafe_allow_html=True)
-
-                # PRD Spacing compliance info
-                st.markdown(f"""
-                <div style="border:2px solid #4CAF50; border-radius:10px; padding:12px; margin-bottom:10px; background-color:#f8fff9;">
-                    <b>🎯 PRD Spacing Compliance</b><br>
-                    ✅ Side Clearance: {SIDE_CLEARANCE}mm (all 4 sides)<br>
-                    ✅ Top Clearance: {TOP_CLEARANCE}mm<br>
-                    ✅ Bottom Clearance: {BOTTOM_CLEARANCE}mm<br>
-                    ✅ Insert Thickness: {PARTITION_THICKNESS}mm
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -876,28 +1131,28 @@ def packaging_app():
             weight_breakdown = best_box["Weight Breakdown"]
 
             st.markdown(f"""
-<div style="border:2px solid #2a9d8f; border-radius:10px; padding:15px;">
-    <b>Recommended Type</b>: {best_box['Box Type']} ({box_dims[0]}×{box_dims[1]}×{box_dims[2]} mm)<br><br>
-    <b>🎯 PRD Key Metric - Cost per Part:</b> 
-    <span style="color:#E91E63; font-weight:bold; font-size:1.2em;">₹{cost_info['cost_per_part']:.2f}</span><br><br>
-    <b>Configuration:</b> {best_box['Layers']} layer(s) of {insert['units_per_insert']} parts each.<br>
-    <b>Max Parts per Box:</b> <b>{best_box['Max Parts']}</b><br>
-    <hr style="border-top: 1px solid #ddd;">
-    <b>Cost Breakdown (PRD Compliant):</b><br>
-    ➤ Box Handling Cost: ₹{cost_info['handling_cost_per_box']:.2f} per box<br>
-    ➤ Packaging Asset Cost: ₹{cost_info['asset_cost_per_box']:.2f} per box<br>
-    ➤ Total Cost per Box: ₹{cost_info['total_cost_per_box']:.2f}<br><br>
-    <b>Box Capacity:</b> {best_box['Capacity']:.1f} kg<br>
-    <b>Total Weight</b> inside the box: {best_box['Total Weight']:.1f} kg<br>
-    <small>
-    ➤ Parts: {best_box['Max Parts']} × {part_weight:.2f} kg = {weight_breakdown['Parts']:.1f} kg<br>
-    ➤ Inserts: {insert['weight_kg']} kg × {best_box['Layers']} = {weight_breakdown['Inserts']:.1f} kg<br>
-    ➤ Separators: {separator.get('weight_kg',0)} kg × {max(0,best_box['Layers']-1)} = {weight_breakdown['Separators']:.1f} kg<br>
-    {f"➤ FLC Lid: {weight_breakdown['FLC Lid']:.2f} kg<br>" if best_box['Box Type'].lower().startswith("flc") else ""}<br>
-    </small><br>
-    <b>Boxes Required per Year:</b> {best_box['Boxes/Year']}<br>
-</div>
-""", unsafe_allow_html=True)
+            <div style="border:2px solid #2a9d8f; border-radius:10px; padding:15px;">
+                <b>Recommended Type</b>: {best_box['Box Type']} ({box_dims[0]}×{box_dims[1]}×{box_dims[2]} mm)<br><br>
+                <b>🎯 PRD Key Metric - Cost per Part:</b> 
+                <span style="color:#E91E63; font-weight:bold; font-size:1.2em;">₹{cost_info['cost_per_part']:.2f}</span><br><br>
+                <b>Configuration:</b> {best_box['Layers']} layer(s) of {insert['units_per_insert']} parts each.<br>
+                <b>Max Parts per Box:</b> <b>{best_box['Max Parts']}</b><br>
+                <hr style="border-top: 1px solid #ddd;">
+                <b>Cost Breakdown (PRD Compliant):</b><br>
+                ➤ Box Handling Cost: ₹{cost_info['handling_cost_per_box']:.2f} per box<br>
+                ➤ Packaging Asset Cost: ₹{cost_info['asset_cost_per_box']:.2f} per box<br>
+                ➤ Total Cost per Box: ₹{cost_info['total_cost_per_box']:.2f}<br><br>
+                <b>Box Capacity:</b> {best_box['Capacity']:.1f} kg<br>
+                <b>Total Weight</b> inside the box: {best_box['Total Weight']:.1f} kg<br>
+                <small>
+                ➤ Parts: {best_box['Max Parts']} × {part_weight:.2f} kg = {weight_breakdown['Parts']:.1f} kg<br>
+                ➤ Inserts: {insert['weight_kg']} kg × {best_box['Layers']} = {weight_breakdown['Inserts']:.1f} kg<br>
+                ➤ Separators: {separator.get('weight_kg',0)} kg × {max(0,best_box['Layers']-1)} = {weight_breakdown['Separators']:.1f} kg<br>
+                {f"➤ FLC Lid: {weight_breakdown['FLC Lid']:.2f} kg<br>" if best_box['Box Type'].lower().startswith("flc") else ""}<br>
+                </small><br>
+                <b>Boxes Required per Year:</b> {best_box['Boxes/Year']}<br>
+            </div>
+            """, unsafe_allow_html=True)
 
             # PRD Point 3: Display alternative options
             if alternatives:
@@ -995,15 +1250,38 @@ def packaging_app():
             else:
                 st.info("ℹ️ Select source, destination, and route types to see truck optimization recommendations.")
 
+        # else:
+        #     st.error("❌ No suitable box and insert combination found.", icon="🚨")
+        #     st.warning("Here is a diagnostics report showing why each standard box was rejected:", icon="🔬")
+        #     log = result.get("rejection_log", {})
+        #     if not log:
+        #         st.info("No boxes were even attempted. This may indicate a problem with the initial inputs.")
+        #     else:
+        #         for box_name, reason in log.items():
+        #             st.markdown(f"- **{box_name}**: {reason}")
+
+    st.divider()
+    if st.button("✅ Validate All Recorded Results"):
+        report = validate_results()
+        if report:
+            st.subheader("Validation Report")
+            st.json(report)
         else:
-            st.error("❌ No suitable box and insert combination found.", icon="🚨")
-            st.warning("Here is a diagnostics report showing why each standard box was rejected:", icon="🔬")
-            log = result.get("rejection_log", {})
-            if not log:
-                st.info("No boxes were even attempted. This may indicate a problem with the initial inputs.")
-            else:
-                for box_name, reason in log.items():
-                    st.markdown(f"- **{box_name}**: {reason}")
+            st.info("No results recorded yet.")
+        st.info("No results recorded yet.")
+    st.divider()
+    csv_data = export_results_to_csv()
+    if csv_data:
+        st.download_button(
+            label="📥 Download CSV Summary (Inputs + Outputs)",
+            data=csv_data,
+            file_name="results_summary.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info("No results logged yet. Run optimization first.")
+
+
 
 # -----------------------------
 # Controller (unchanged)
@@ -1012,3 +1290,4 @@ if not st.session_state.logged_in:
     login()
 else:
     packaging_app()
+    

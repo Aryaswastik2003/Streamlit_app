@@ -1,0 +1,399 @@
+[
+    {
+        "inputs": {
+            "Part Dim (mm)": "350x250x150",
+            "part_dim": [
+                350,
+                250,
+                150
+            ],
+            "Part Weight (kg)": 2.5,
+            "Fragility": "Low",
+            "Stacking Allowed": true,
+            "Forklift Available": false,
+            "Forklift Capacity": null,
+            "Forklift Dim": null,
+            "Annual Parts": 50000,
+            "Orientation Restriction": "None"
+        },
+        "box_details": {
+            "Box Type": "FLC",
+            "Box Dimensions": [
+                1200,
+                1000,
+                1200
+            ],
+            "Internal Dimensions": [
+                1170,
+                970,
+                1170
+            ],
+            "Max Parts": 72,
+            "Total Weight": 209.01999999999998,
+            "Weight Breakdown": {
+                "Parts": 180.0,
+                "Inserts": 15.54,
+                "Separators": 2.98,
+                "FLC Lid": 10.5
+            },
+            "Capacity": 1000,
+            "Asset Cost": 3200,
+            "Wasted Volume % (parts)": 28.831411781451433,
+            "Wasted Volume % (insert)": 5.698711735587231,
+            "Volume Efficiency %": 65.46987648296133,
+            "Parts Efficiency %": 72.88357741819317,
+            "Insert Material Value %": 7.413700935231843,
+            "Insert Outer Volume (mm^3)": 340223125,
+            "Boxes/Year": 695,
+            "Layers": 3,
+            "Orientation Restriction": "None",
+            "Standing Category": "Length Standing"
+        },
+        "insert_details": {
+            "units_per_insert": 24,
+            "matrix": [
+                4,
+                6
+            ],
+            "cell_dims": [
+                250,
+                150,
+                350
+            ],
+            "outer_dims": [
+                1025,
+                935,
+                355
+            ],
+            "part_orientation": [
+                250,
+                150,
+                350
+            ],
+            "volume_efficiency": 23.72286273951619,
+            "standing_category": "Length Standing",
+            "type": "PP Partition Grid",
+            "gsm_or_thickness": "6.0mm corrugated PP",
+            "weight_kg": 5.18,
+            "note": "Grid partition (thickness: 6.0mm, load factor: 1.0)"
+        },
+        "separator_details": {
+            "needed": true,
+            "type": "Honeycomb Layer Pad",
+            "weight_kg": 1.49,
+            "note": "Adds strength between stacked layers."
+        },
+        "cost_breakdown": {
+            "handling_cost_per_box": 50,
+            "asset_cost_per_box": 3200,
+            "total_cost_per_box": 3250,
+            "cost_per_part": 45.138888888888886
+        },
+        "alternative_options": [
+            {
+                "insert_details": {
+                    "units_per_insert": 36,
+                    "matrix": [
+                        9,
+                        4
+                    ],
+                    "cell_dims": [
+                        150,
+                        250,
+                        350
+                    ],
+                    "outer_dims": [
+                        1400,
+                        1025,
+                        355
+                    ],
+                    "part_orientation": [
+                        150,
+                        250,
+                        350
+                    ],
+                    "volume_efficiency": 34.98985967948074,
+                    "standing_category": "Length Standing",
+                    "type": "PP Partition Grid",
+                    "gsm_or_thickness": "6.0mm corrugated PP",
+                    "weight_kg": 7.75,
+                    "note": "Grid partition (thickness: 6.0mm, load factor: 1.0)"
+                },
+                "separator_details": {
+                    "needed": true,
+                    "type": "Honeycomb Layer Pad",
+                    "weight_kg": 1.49,
+                    "note": "Adds strength between stacked layers."
+                },
+                "cost_per_part": 67.70833333333333,
+                "cost_breakdown": {
+                    "handling_cost_per_box": 75,
+                    "asset_cost_per_box": 4800,
+                    "total_cost_per_box": 4875,
+                    "cost_per_part": 67.70833333333333
+                },
+                "box_details": {
+                    "Box Type": "PLS",
+                    "Box Dimensions": [
+                        1500,
+                        1200,
+                        1000
+                    ],
+                    "Internal Dimensions": [
+                        1466,
+                        1166,
+                        790
+                    ],
+                    "Max Parts": 72,
+                    "Total Weight": 224.99,
+                    "Weight Breakdown": {
+                        "Parts": 180.0,
+                        "Inserts": 15.5,
+                        "Separators": 1.49,
+                        "FLC Lid": 28.0
+                    },
+                    "Capacity": 600,
+                    "Asset Cost": 4800,
+                    "Wasted Volume % (parts)": 30.02028064103852,
+                    "Wasted Volume % (insert)": 5.468785475829953,
+                    "Volume Efficiency %": 64.51093388313153,
+                    "Parts Efficiency %": 71.759302141462,
+                    "Insert Material Value %": 7.24836825833047,
+                    "Insert Outer Volume (mm^3)": 509425000,
+                    "Boxes/Year": 695,
+                    "Layers": 2,
+                    "Orientation Restriction": "None",
+                    "Standing Category": "Length Standing"
+                }
+            },
+            {
+                "insert_details": {
+                    "units_per_insert": 24,
+                    "matrix": [
+                        4,
+                        6
+                    ],
+                    "cell_dims": [
+                        250,
+                        150,
+                        350
+                    ],
+                    "outer_dims": [
+                        1025,
+                        935,
+                        355
+                    ],
+                    "part_orientation": [
+                        250,
+                        150,
+                        350
+                    ],
+                    "volume_efficiency": 49.125220186254765,
+                    "standing_category": "Length Standing",
+                    "type": "PP Partition Grid",
+                    "gsm_or_thickness": "6.0mm corrugated PP",
+                    "weight_kg": 5.18,
+                    "note": "Grid partition (thickness: 6.0mm, load factor: 1.0)"
+                },
+                "separator_details": {
+                    "needed": true,
+                    "type": "Honeycomb Layer Pad",
+                    "weight_kg": 1.49,
+                    "note": "Adds strength between stacked layers."
+                },
+                "cost_per_part": 106.25,
+                "cost_breakdown": {
+                    "handling_cost_per_box": 50,
+                    "asset_cost_per_box": 2500,
+                    "total_cost_per_box": 2550,
+                    "cost_per_part": 106.25
+                },
+                "box_details": {
+                    "Box Type": "FLC",
+                    "Box Dimensions": [
+                        1200,
+                        1000,
+                        595
+                    ],
+                    "Internal Dimensions": [
+                        1170,
+                        970,
+                        565
+                    ],
+                    "Max Parts": 24,
+                    "Total Weight": 71.98,
+                    "Weight Breakdown": {
+                        "Parts": 60.0,
+                        "Inserts": 5.18,
+                        "Separators": 0.0,
+                        "FLC Lid": 6.8
+                    },
+                    "Capacity": 700,
+                    "Asset Cost": 2500,
+                    "Wasted Volume % (parts)": 50.87477981374524,
+                    "Wasted Volume % (insert)": 3.933624029874372,
+                    "Volume Efficiency %": 45.191596156380385,
+                    "Parts Efficiency %": 52.60529709161223,
+                    "Insert Material Value %": 7.413700935231843,
+                    "Insert Outer Volume (mm^3)": 340223125,
+                    "Boxes/Year": 2084,
+                    "Layers": 1,
+                    "Orientation Restriction": "None",
+                    "Standing Category": "Length Standing"
+                }
+            },
+            {
+                "insert_details": {
+                    "units_per_insert": 3,
+                    "matrix": [
+                        3,
+                        1
+                    ],
+                    "cell_dims": [
+                        150,
+                        350,
+                        250
+                    ],
+                    "outer_dims": [
+                        470,
+                        360,
+                        255
+                    ],
+                    "part_orientation": [
+                        150,
+                        350,
+                        250
+                    ],
+                    "volume_efficiency": 65.09388596562924,
+                    "standing_category": "Width Standing",
+                    "type": "PP Partition Grid",
+                    "gsm_or_thickness": "5.0mm corrugated PP",
+                    "weight_kg": 0.76,
+                    "note": "Grid partition (thickness: 5.0mm, load factor: 0.6)"
+                },
+                "separator_details": {
+                    "needed": true,
+                    "type": "Honeycomb Layer Pad",
+                    "weight_kg": 1.49,
+                    "note": "Adds strength between stacked layers."
+                },
+                "cost_per_part": 291.6666666666667,
+                "cost_breakdown": {
+                    "handling_cost_per_box": 25,
+                    "asset_cost_per_box": 850,
+                    "total_cost_per_box": 875,
+                    "cost_per_part": 291.6666666666667
+                },
+                "box_details": {
+                    "Box Type": "PP Box",
+                    "Box Dimensions": [
+                        600,
+                        400,
+                        300
+                    ],
+                    "Internal Dimensions": [
+                        566,
+                        366,
+                        292
+                    ],
+                    "Max Parts": 3,
+                    "Total Weight": 9.86,
+                    "Weight Breakdown": {
+                        "Parts": 7.5,
+                        "Inserts": 0.76,
+                        "Separators": 0.0,
+                        "FLC Lid": 1.6
+                    },
+                    "Capacity": 16,
+                    "Asset Cost": 850,
+                    "Wasted Volume % (parts)": 34.90611403437076,
+                    "Wasted Volume % (insert)": 6.234134450193977,
+                    "Volume Efficiency %": 58.85975151543526,
+                    "Parts Efficiency %": 67.59984329682867,
+                    "Insert Material Value %": 8.740091781393408,
+                    "Insert Outer Volume (mm^3)": 43146000,
+                    "Boxes/Year": 16667,
+                    "Layers": 1,
+                    "Orientation Restriction": "None",
+                    "Standing Category": "Width Standing"
+                }
+            },
+            {
+                "insert_details": {
+                    "units_per_insert": 3,
+                    "matrix": [
+                        3,
+                        1
+                    ],
+                    "cell_dims": [
+                        150,
+                        350,
+                        250
+                    ],
+                    "outer_dims": [
+                        470,
+                        360,
+                        255
+                    ],
+                    "part_orientation": [
+                        150,
+                        350,
+                        250
+                    ],
+                    "volume_efficiency": 55.904160888128644,
+                    "standing_category": "Width Standing",
+                    "type": "PP Partition Grid",
+                    "gsm_or_thickness": "5.0mm corrugated PP",
+                    "weight_kg": 0.76,
+                    "note": "Grid partition (thickness: 5.0mm, load factor: 0.6)"
+                },
+                "separator_details": {
+                    "needed": true,
+                    "type": "Honeycomb Layer Pad",
+                    "weight_kg": 1.49,
+                    "note": "Adds strength between stacked layers."
+                },
+                "cost_per_part": 315.0,
+                "cost_breakdown": {
+                    "handling_cost_per_box": 25,
+                    "asset_cost_per_box": 920,
+                    "total_cost_per_box": 945,
+                    "cost_per_part": 315.0
+                },
+                "box_details": {
+                    "Box Type": "PP Box",
+                    "Box Dimensions": [
+                        600,
+                        400,
+                        348
+                    ],
+                    "Internal Dimensions": [
+                        566,
+                        366,
+                        340
+                    ],
+                    "Max Parts": 3,
+                    "Total Weight": 10.06,
+                    "Weight Breakdown": {
+                        "Parts": 7.5,
+                        "Inserts": 0.76,
+                        "Separators": 0.0,
+                        "FLC Lid": 1.8
+                    },
+                    "Capacity": 16,
+                    "Asset Cost": 920,
+                    "Wasted Volume % (parts)": 44.095839111871356,
+                    "Wasted Volume % (insert)": 5.354021351343063,
+                    "Volume Efficiency %": 50.55013953678558,
+                    "Parts Efficiency %": 59.29023131817899,
+                    "Insert Material Value %": 8.740091781393408,
+                    "Insert Outer Volume (mm^3)": 43146000,
+                    "Boxes/Year": 16667,
+                    "Layers": 1,
+                    "Orientation Restriction": "None",
+                    "Standing Category": "Width Standing"
+                }
+            }
+        ]
+    }
+]
