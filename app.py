@@ -734,9 +734,9 @@ def explain(record, validation):
     max_parts = box.get("Max Parts", "N/A")
     total_weight = box.get("Total Weight", "N/A")
     capacity = box.get("Capacity", "N/A")
-    # parts_eff = box.get("Parts Efficiency %", "N/A")
-    # insert_overhead = box.get("Insert Overhead %", "N/A")
-    # box_used = box.get("Box Used %", "N/A")
+    parts_eff = box.get("Parts Efficiency %", "N/A")
+    insert_overhead = box.get("Insert Overhead %", "N/A")
+    box_used = box.get("Box Used %", "N/A")
     errors_text = ""
     if validation.get("errors"):
         errors_text = " — Errors: " + "; ".join(validation["errors"])
