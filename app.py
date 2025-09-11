@@ -986,10 +986,10 @@ def packaging_app():
     st.caption("🎯 Now optimized for minimum volume wastage with smart material selection based on part size")
 
     # --- Inputs ---
-    part_length = st.number_input("Part Length (mm)", min_value=1, value=350, key="part_length")
-    part_width = st.number_input("Part Width (mm)", min_value=1, value=250, key="part_width")
-    part_height = st.number_input("Part Height (mm)", min_value=1, value=150, key="part_height")
-    part_weight = st.number_input("Part Weight (kg)", min_value=0.1, step=0.1, value=2.5, key="part_weight")
+    part_length = st.number_input("Part Length (mm)", min_value=50, key="part_length")
+    part_width = st.number_input("Part Width (mm)", min_value=50, key="part_width")
+    part_height = st.number_input("Part Height (mm)", min_value=50, key="part_height")
+    part_weight = st.number_input("Part Weight (kg)", min_value=0.5, step=0.1, key="part_weight")
 
     fragility_level = st.selectbox("Fragility Level", ["Low", "Medium", "High"], key="fragility_level")
     stacking_allowed = st.toggle("Stacking Allowed", value=True, key="stacking_allowed")
