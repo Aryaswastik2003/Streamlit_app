@@ -372,7 +372,7 @@ def optimize_truck_loading(box_recommendation, source, destination, route_percen
 # -----------------------------
 # Updated Recommendation Functions (PRD Points 1, 2, 3, 7)
 # -----------------------------
-def design_insert_for_box(part_dim, box_internal_dim, fragility, part_weight=1.0, orientation_restriction="None"):
+def design_insert_for_box(part_dim, box_internal_dim, fragility, part_weight, orientation_restriction="None"):
     best_fit = {
         "units_per_insert": 0,
         "matrix": (0, 0),
@@ -485,17 +485,34 @@ def check_ergonomic_limit(total_weight: float) -> Tuple[bool, str]:
         )
     return True, "OK"
 
-def calculate_cost_per_part(box, insert, separator, layers, fit_count, annual_parts, route_info):
+def calculate_cost_per_part(box, insert, separator, layers, fit_count, annual_parts, route_info, part_weight):
     """Calculate cost per part per trip as per PRD requirement (Point 1)"""
     if not route_info or fit_count <= 0:
         return float('inf'), {}
     
     # Basic cost calculation without truck optimization
+        # --- Weight breakdown ---
+    part_total_weight = fit_count * part_weight
     insert_weight_total = insert["weight_kg"] * layers
     separator_weight_total = separator["weight_kg"] * max(0, layers - 1)
-    part_total_weight = fit_count * route_info.get("part_weight", 1.0)
     box_empty_mass = getattr(box, "empty_weight_kg", 0.0)
-    total_weight = part_total_weight + insert_weight_total + separator_weight_total + box_empty_mass
+
+    # Payload weight (inside box, no empty box mass)
+    package_weight = part_total_weight + insert_weight_total + separator_weight_total
+
+    # Gross weight (payload + box mass)
+    total_weight = package_weight + box_empty_mass
+
+    # Build weight breakdown
+    weight_breakdown = {
+        "Parts": round(part_total_weight, 3),
+        "Inserts": round(insert_weight_total, 3),
+        "Separators": round(separator_weight_total, 3),
+        "Box": round(box_empty_mass, 3)
+    }
+    if box.box_type.lower().startswith("flc"):
+        weight_breakdown["FLC Lid"] = round(box_empty_mass, 3)
+
 
 
 
@@ -513,7 +530,7 @@ def calculate_cost_per_part(box, insert, separator, layers, fit_count, annual_pa
         "cost_per_part": cost_per_part
     }
     
-    return cost_per_part, cost_breakdown
+    return cost_per_part, cost_breakdown,weight_breakdown
 import json, os, pandas as pd
 
 LOG_FILE = "results_log.json"
@@ -748,6 +765,7 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
     
     for box in BOX_DATABASE:
         log_key = f"{box.box_type} ({box.dims[0]}x{box.dims[1]}x{box.dims[2]})"
+
         internal_dims = get_internal_dims(box)
 
         if forklift_available and forklift_dim:
@@ -762,12 +780,15 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
 
         separator = get_separator_details(insert, stacking_allowed)
         insert_height = insert["outer_dims"][2]
-        if insert_height <= 0: continue
+        if insert_height <= 0: 
+            continue
 
         layers = internal_dims[2] // insert_height if stacking_allowed else 1
-        if layers < 1: layers = 1
+        if layers < 1: 
+            layers = 1
         fit_count = layers * insert["units_per_insert"]
-        if fit_count == 0: continue
+        if fit_count == 0: 
+            continue
 
         # Limit parts by box weight capacity
         if part_weight <= 0:
@@ -787,17 +808,15 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
         separator_weight_total = separator["weight_kg"] * max(0, layers - 1)
         box_empty_mass = getattr(box, "empty_weight_kg", 0.0)
         total_weight = part_total_weight + insert_weight_total + separator_weight_total + box_empty_mass
-        # --- ergonomic safety check ---
-        total_weight = part_total_weight + insert_weight_total + separator_weight_total + box_empty_mass
 
-# --- ergonomic safety check ---
-        if not forklift_available:   # apply only if no forklift
+        # ergonomic safety check (only if no forklift)
+        if not forklift_available:   
             ok, msg = check_ergonomic_limit(total_weight)
             if not ok:
                 rejection_log[log_key] = msg
                 continue
 
-        # --- forklift capacity check ---
+        # forklift capacity check
         if forklift_available and forklift_capacity is not None:
             if total_weight > forklift_capacity:
                 rejection_log[log_key] = (
@@ -805,8 +824,6 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
                     f"({forklift_capacity} kg)."
                 )
                 continue
-
-
 
         # Adjust fit_count if overweight
         while fit_count > 0 and total_weight > box.capacity_kg:
@@ -818,83 +835,48 @@ def recommend_boxes(part_dim, part_weight, stacking_allowed, fragility, forklift
             rejection_log[log_key] = f"Rejected: Even 1 part + packaging exceeds box capacity ({box.capacity_kg} kg)."
             continue
 
-        # Forklift capacity check
-        if forklift_available and forklift_capacity and total_weight > forklift_capacity:
-            rejection_log[log_key] = f"Rejected: Total weight ({total_weight:.1f} kg) exceeds forklift capacity ({forklift_capacity} kg)."
-            continue
-
-        # PRD Point 1: Calculate cost per part per trip
-        cost_per_part, cost_breakdown = calculate_cost_per_part(
-            box, insert, separator, layers, fit_count, annual_parts, route_info
+        # --- ✅ If we reach here, this box is viable ---
+        cost_per_part, cost_breakdown, weight_breakdown = calculate_cost_per_part(
+            box, insert, separator, layers, fit_count, annual_parts, route_info, part_weight
         )
 
-        # Volume/waste metrics (unchanged)
-        part_volume = part_dim[0] * part_dim[1] * part_dim[2]
-        box_volume = internal_dims[0] * internal_dims[1] * internal_dims[2]
-        used_volume_parts = fit_count * part_volume
-        insert_outer_vol = insert["outer_dims"][0] * insert["outer_dims"][1] * insert["outer_dims"][2]
-        used_volume_insert = insert_outer_vol * layers
-
-                # --- New Efficiency Metrics ---
-        parts_efficiency_pct = (used_volume_parts / box_volume) * 100 if box_volume > 0 else 0
-        insert_overhead_pct = ((used_volume_insert - used_volume_parts) / box_volume) * 100 if box_volume > 0 and used_volume_insert > used_volume_parts else 0
-        box_used_pct = min(100, parts_efficiency_pct + insert_overhead_pct)  # never exceed 100%
-
-        # Optional: how much of insert is "wasted" vs useful
-        insert_material_pct = 100 * ((used_volume_insert - used_volume_parts) / used_volume_insert) if used_volume_insert > 0 else 0
-
-
-        boxes_per_year = -(-annual_parts // fit_count) if fit_count > 0 else 0
-
         option = {
-            "insert_details": insert,
-            "separator_details": separator,
-            "cost_per_part": cost_per_part,
-            "cost_breakdown": cost_breakdown,
             "box_details": {
                 "Box Type": box.box_type,
                 "Box Dimensions": box.dims,
                 "Internal Dimensions": internal_dims,
-                "Max Parts": fit_count,
-                "Total Weight": total_weight,
-                "Weight Breakdown": {
-                    "Parts": part_total_weight,
-                    "Inserts": insert_weight_total,
-                    "Separators": separator_weight_total,
-                    "Box": box_empty_mass
-                },
                 "Capacity": box.capacity_kg,
-                "Asset Cost": getattr(box, "asset_cost", 0.0),
-                "Parts Efficiency %": parts_efficiency_pct,
-                "Insert Overhead %": insert_overhead_pct,
-                "Box Used %": box_used_pct,
-                "Insert Material Value %": insert_material_pct,
-
-
-                "Insert Outer Volume (mm^3)": insert_outer_vol,
-                "Boxes/Year": boxes_per_year,
+                "Total Weight": total_weight,
+                "Max Parts": fit_count,
                 "Layers": layers,
+                "Boxes/Year": math.ceil(annual_parts / fit_count) if fit_count > 0 else 0,
+                "Parts Efficiency %": insert["volume_efficiency"],
+                "Insert Overhead %": 100 - insert["volume_efficiency"],
+                "Box Used %": (fit_count * part_weight / box.capacity_kg) * 100,
+                "Weight Breakdown": weight_breakdown,
                 "Orientation Restriction": orientation_restriction,
-                "Standing Category": insert.get("standing_category", "None")
-            }
+            },
+            "insert_details": insert,
+            "separator_details": separator,
+            "cost_breakdown": cost_breakdown,
+            "cost_per_part": cost_per_part,
         }
-
         all_viable_options.append(option)
 
+    # --- Final return ---
     if not all_viable_options:
         return {"rejection_log": rejection_log}
 
-    # PRD Point 1 & 3: Sort by cost per part (cheapest first) and provide dual recommendations
+    # Sort by cost per part (cheapest first) and provide dual recommendations
     all_viable_options.sort(key=lambda x: x["cost_per_part"])
 
     return {
-        "system_recommendation": all_viable_options[0],  # Best choice by cost per part
-        "alternative_options": all_viable_options[1:5],  # Up to 4 alternatives for user choice
+        "system_recommendation": all_viable_options[0],   # Best choice by cost per part
+        "alternative_options": all_viable_options[1:5],  # Up to 4 alternatives
         "all_options": all_viable_options,
         "total_options": len(all_viable_options),
         "rejection_log": rejection_log
     }
-
 
 # -----------------------------
 # Truck 2D Visualization Function
@@ -1190,9 +1172,11 @@ def packaging_app():
                 ➤ Separators: {separator.get('weight_kg',0)} kg × {max(0,best_box['Layers']-1)} = {weight_breakdown['Separators']:.1f} kg<br>
                 ➤ Box: {weight_breakdown['Box']:.2f} kg<br>
                 </small><br>
+               <!--
                 <b>Parts Efficiency:</b> {best_box['Parts Efficiency %']:.1f}%<br>
                 <b>Insert Overhead:</b> {best_box['Insert Overhead %']:.1f}%<br>
-                <b>Box Used:</b> {best_box['Box Used %']:.1f}%<br>
+                <b>Box Used:</b> {best_box['Box Used %']:.1f}%<br> 
+                -->
                 <b>Boxes Required per Year:</b> {best_box['Boxes/Year']}<br>
             </div>
             """, unsafe_allow_html=True)
@@ -1201,6 +1185,7 @@ def packaging_app():
             if alternatives:
                 st.divider()
                 st.subheader("🎛️ Alternative Options (PRD: User Custom Choice)")
+                
                 
                 alternative_data = []
                 for i, alt in enumerate(alternatives[:4], 1):  # Show top 4 alternatives
@@ -1211,12 +1196,12 @@ def packaging_app():
                         "Box Type": f"{alt_box['Box Type']} ({alt_box['Box Dimensions'][0]}×{alt_box['Box Dimensions'][1]}×{alt_box['Box Dimensions'][2]})",
                         "Parts/Box": alt_box['Max Parts'],
                         "Cost/Part (₹)": f"{alt_cost['cost_per_part']:.2f}",
-                        "Parts Eff %": f"{alt_box['Parts Efficiency %']:.1f}%",
+                        "Parts Efficiency %": f"{alt_box['Parts Efficiency %']:.1f}%",
                         "Insert Overhead %": f"{alt_box['Insert Overhead %']:.1f}%",
                         "Box Used %": f"{alt_box['Box Used %']:.1f}%",
-
                         "Standing Category": alt["insert_details"].get("standing_category", "None")
                     })
+
                 
                 st.table(alternative_data)
 
