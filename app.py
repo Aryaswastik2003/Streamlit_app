@@ -1291,8 +1291,8 @@ def packaging_app():
         #         for box_name, reason in log.items():
         #             st.markdown(f"- **{box_name}**: {reason}")
 
-    st.divider()
-    if st.button("✅ Validate All Recorded Results"):
+    # st.divider()
+    # if st.button("✅ Validate All Recorded Results"):
         report = validate_results()
         if report:
             st.subheader("Validation Report")
