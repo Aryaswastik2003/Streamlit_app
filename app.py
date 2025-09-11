@@ -1291,15 +1291,7 @@ def packaging_app():
         #         for box_name, reason in log.items():
         #             st.markdown(f"- **{box_name}**: {reason}")
 
-    # st.divider()
-    # if st.button("✅ Validate All Recorded Results"):
-        report = validate_results()
-        if report:
-            st.subheader("Validation Report")
-            st.json(report)
-        else:
-            st.info("No results recorded yet.")
-        st.info("No results recorded yet.")
+
     st.divider()
     csv_data = export_results_to_csv()
     if csv_data:
